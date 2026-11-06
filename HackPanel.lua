@@ -771,7 +771,7 @@ local function createMenu()
     diagnostic.Visible = false -- Press minus to show/hide debug output.
 
     -- GitHub Assets branch: filenames match the repository exactly.
-    local RAW_ROOT = "https://raw.githubusercontent.com/JrakeM-TheSigma/temp/Assets/"
+    local RAW_ROOT = "https://raw.githubusercontent.com/JrakeM-TheSigma/Hackpanel/Assets/"
     local assetFiles = {
         ["THE HOTEL"] = {"HotelBackground.png", "HotelTitle.png"},
         ["THE MINES"] = {"MinesBackground.png", "MinesTitle.png"},
