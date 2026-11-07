@@ -21,6 +21,12 @@ if type(previousCleanup) == "function" then
     pcall(previousCleanup)
 end
 sharedEnvironment.HackPanelNightVisionCleanup = nil
+-- Invalidate every background loop from a previous optimized run.
+local runToken = {}
+sharedEnvironment.HackPanelRunToken = runToken
+local function isCurrentRun()
+    return sharedEnvironment.HackPanelRunToken == runToken
+end
 -- Remove highlights from previous executions.
 for _, descendant in ipairs(workspace:GetDescendants()) do
     if (descendant:IsA("Highlight") and descendant.Name == "HackPanelEntityOutline")
@@ -46,7 +52,7 @@ end
 -- Configuration
 local TOGGLE_KEY = Enum.KeyCode.LeftAlt
 local CLUSTER_RADIUS_PIXELS = 60
-local SCAN_INTERVAL_SECONDS = 1.5
+local SCAN_INTERVAL_SECONDS = 3.0
 -- Follow the LOCAL PLAYER, not the team's LatestRoom progress.
 -- A teammate can advance LatestRoom while you remain in an older room.
 local function latestRoomNumber()
@@ -88,7 +94,7 @@ local function getCurrentRoom()
     local rooms = getCurrentRooms()
     if not rooms then cachedRoom = nil; return nil, nil end
     if os.clock() >= nextRoomCheck then
-        nextRoomCheck = os.clock() + 0.2
+        nextRoomCheck = os.clock() + 0.75
         local character = LocalPlayer.Character
         local root = character and character:FindFirstChild("HumanoidRootPart")
         local found = root and roomForPosition(root.Position) or nil
@@ -353,7 +359,7 @@ local function startBackgroundLiveScanner()
     end
 
     backgroundScanTask = task.spawn(function()
-        while isEspActive do
+        while isEspActive and isCurrentRun() do
             scanAllLocations()
             task.wait(SCAN_INTERVAL_SECONDS)
         end
@@ -402,7 +408,14 @@ local function startEspLoop()
         mainRenderConnection:Disconnect()
     end
 
+    local lastEspDraw = 0
     mainRenderConnection = RunService.RenderStepped:Connect(function()
+        if not isCurrentRun() then
+            mainRenderConnection:Disconnect()
+            return
+        end
+        if os.clock() - lastEspDraw < 0.085 then return end
+        lastEspDraw = os.clock()
         if not isEspActive or not screenGui or not screenGui.Parent then
             return
         end
@@ -682,7 +695,12 @@ local function createMenu()
     cursorOutline.Color = Color3.fromRGB(24, 18, 16)
     cursorOutline.Thickness = 2
     cursorOutline.Parent = cursorDot
-    RunService.RenderStepped:Connect(function()
+    local cursorConnection
+    cursorConnection = RunService.RenderStepped:Connect(function()
+        if not isCurrentRun() or not cursorDot.Parent then
+            cursorConnection:Disconnect()
+            return
+        end
         if cursorDot.Parent then
             cursorDot.Visible = menuGui.Enabled
             local pos = UserInputService:GetMouseLocation()
@@ -1311,6 +1329,8 @@ local function createMenu()
     local nvGeneration = 0
     local nvRecords = {}
     local nvVisualRecords = {}
+    local nvRoomConnection = nil
+    local nvScanGeneration = 0
     local nvLabel = Instance.new("TextLabel")
     nvLabel.Name = "NightVisionDiagnostics"
     nvLabel.Parent = hotelPages.Essentials
@@ -1348,14 +1368,22 @@ local function createMenu()
         return nil
     end
     local function nvRegister(light)
-        if not nvIsLight(light) or not nvFixture(light) or nvRecords[light] then return end
-        if not light.Enabled or light.Range <= 0 then return end
+        if not nvIsLight(light) or nvRecords[light] then return end
+        -- Dark rooms can use lights outside the named fixture folders.
         local brightness = light.Brightness
+        -- Dark-room fixtures often start at exactly zero. They must still be
+        -- registered, even when there is no known fixture fallback.
         local fallback = nvFallback(light)
-        if brightness <= 0.025 and not fallback then return end
         local fixture = light:FindFirstAncestor("LightFixture")
+            or light:FindFirstAncestor("Light_Fixtures")
+            or light:FindFirstAncestor("Chandelier")
+            or light:FindFirstAncestor("Lamp")
+            or light:FindFirstAncestor("WallLamp")
+            or light:FindFirstAncestor("WallLight")
         local rec = {
-            baseline = brightness > 0.025 and brightness or fallback,
+            baseline = brightness > 0.025 and brightness or 0.3,
+            initialRange = light.Range,
+            initialEnabled = light.Enabled,
             initialBrightness = brightness,
             lastObserved = brightness,
             lastChange = os.clock(),
@@ -1365,19 +1393,76 @@ local function createMenu()
         }
         nvRecords[light] = rec
     end
+    -- Learn the original visual properties from an already-lit lamp, rather
+    -- than inventing a yellow tint. ReplicatedStorage templates are preferred.
+    local nvReferenceByName = {}
+    local nvReferenceDefault = nil
+    local nvReferenceReady = false
+    local nvBulbNames = {neon=true, bulb=true, lightbulb=true,
+        lightpart=true, diffuser=true, glow=true}
+    local function nvIsBulb(part)
+        return part:IsA("BasePart") and nvBulbNames[part.Name:lower()] == true
+    end
+    local function nvReference(part)
+        return {material=part.Material, color=part.Color,
+            transparency=part.Transparency, reflectance=part.Reflectance}
+    end
+    local function nvCollectReferences(root, generation, requireLit)
+        if not root then return end
+        local descendants = root:GetDescendants()
+        for i, part in ipairs(descendants) do
+            if not nightVisionEnabled or generation ~= nvGeneration then return end
+            if nvIsBulb(part) and part.Material == Enum.Material.Neon then
+                local qualifies = true
+                if requireLit then
+                    qualifies = false
+                    local fixture = part.Parent
+                    for _ = 1, 4 do
+                        if not fixture then break end
+                        for _, light in ipairs(fixture:GetDescendants()) do
+                            if nvIsLight(light) and light.Enabled and light.Brightness > 0.3 then
+                                qualifies = true
+                                break
+                            end
+                        end
+                        if qualifies then break end
+                        fixture = fixture.Parent
+                    end
+                end
+                if qualifies then
+                    local ref = nvReference(part)
+                    local key = part.Name:lower()
+                    if not nvReferenceByName[key] then nvReferenceByName[key] = ref end
+                    if not nvReferenceDefault then nvReferenceDefault = ref end
+                end
+            end
+            if i % 175 == 0 then task.wait() end
+        end
+    end
     local function nvVisual(fixture)
         if not fixture then return end
         for _, part in ipairs(fixture:GetDescendants()) do
-            if part:IsA("BasePart") and (part.Name == "Neon" or part.Name == "Bulb") then
-                local rec = nvVisualRecords[part]
-                if not rec then
-                    rec = {initialTransparency = part.Transparency, restored = false}
-                    nvVisualRecords[part] = rec
+            if nvIsBulb(part) then
+                if not nvVisualRecords[part] then
+                    nvVisualRecords[part] = {
+                        initialTransparency = part.Transparency,
+                        initialMaterial = part.Material,
+                        initialColor = part.Color,
+                        initialReflectance = part.Reflectance,
+                    }
                 end
-                if part.Transparency > 0.75 then
-                    rec.restored = true
-                    pcall(function() part.Transparency = 0.1 end)
+                -- Prefer a matching real bulb; avoid using an unrelated template
+                -- whose color could give the fixture an unwanted tint.
+                local reference = nvReferenceByName[part.Name:lower()]
+                if reference then
+                    pcall(function()
+                        part.Material = reference.material
+                        part.Color = reference.color
+                        part.Transparency = reference.transparency
+                        part.Reflectance = reference.reflectance
+                    end)
                 end
+                -- No fabricated tint when a matching real lamp isn't available.
             end
         end
     end
@@ -1385,11 +1470,8 @@ local function createMenu()
         local now = os.clock()
         local restoredCount = 0
         local trackedCount = 0
-        -- Re-scan: existing lights may become visible after the room streams in,
-        -- and already-broken fixtures may have been loaded before enabling NV.
-        for _, light in ipairs(rooms:GetDescendants()) do
-            if nvIsLight(light) then nvRegister(light) end
-        end
+        -- Light discovery is handled by a batched initial scan and DescendantAdded.
+        -- Never traverse the entire CurrentRooms tree on every tick.
         local brokenFixtures = {}
         for light, rec in pairs(nvRecords) do
             if not light.Parent or not light:IsDescendantOf(rooms) then
@@ -1403,55 +1485,71 @@ local function createMenu()
                     rec.lastObserved = current
                     rec.lastChange = now
                 end
-                if light.Enabled and current <= 0.025 then
+                if current <= 0.025 then
                     rec.broken = true
                 end
-                if rec.broken and rec.fixture then brokenFixtures[rec.fixture] = true end
-                -- Wait for the game's fade to settle before applying NV.
-                if rec.broken and light.Enabled and rec.baseline and current <= 0.025
-                    and now - rec.lastChange >= 0.8 then
-                    pcall(function() light.Brightness = rec.baseline end)
-                    rec.lastObserved = rec.baseline
+                if rec.fixture then brokenFixtures[rec.fixture] = true end
+                -- Apply the minimum immediately, including lights starting at 0.
+                -- Keep it active if the game disables or dims it again.
+                if current < 0.3 or not light.Enabled or light.Range <= 0 then
+                    pcall(function()
+                        light.Enabled = true
+                        light.Brightness = math.max(current, 0.3)
+                        if light.Range <= 0 then light.Range = 16 end
+                    end)
+                    rec.lastObserved = light.Brightness
                     rec.restored = true
                 end
                 if rec.restored then restoredCount += 1 end
             end
         end
-        -- Keep bulbs visible even if the game hides them after restoring
-        -- light brightness. Do not touch fixtures that haven't gone dark.
+        -- Wait until genuine lamp appearance has been sampled before changing bulbs.
+        if nvReferenceReady then
         for fixture in pairs(brokenFixtures) do
-            if fixture.Parent then nvVisual(fixture) end
+            if fixture.Parent and not fixture:GetAttribute("HackPanelNVVisualChecked") then
+                -- Scan each fixture only once, not on every periodic tick.
+                nvVisual(fixture)
+                fixture:SetAttribute("HackPanelNVVisualChecked", true)
+            end
         end
-        nvLabel.Text = string.format("Fixture lights: %d | restored: %d", trackedCount, restoredCount)
+        end
+        nvLabel.Text = string.format("Fixture lights: %d | restored: %d | lamp reference: %s", trackedCount, restoredCount, nvReferenceDefault and "found" or "not found")
     end
     local function disableNightVision()
         nightVisionEnabled = false
         nvGeneration += 1
+        nvScanGeneration += 1
+        if nvRoomConnection then nvRoomConnection:Disconnect(); nvRoomConnection = nil end
         -- Undo *only* NV modifications, returning broken lights to darkness.
         for light, rec in pairs(nvRecords) do
             if light.Parent and rec.restored then
                 pcall(function()
-                    light.Brightness = rec.broken and 0 or rec.initialBrightness
+                    light.Brightness = rec.initialBrightness
+                    light.Enabled = rec.initialEnabled
+                    light.Range = rec.initialRange
                 end)
             end
         end
         for part, rec in pairs(nvVisualRecords) do
-            if part.Parent and rec.restored then
-                local fixture = part:FindFirstAncestor("LightFixture")
-                local isBroken = false
-                for _, lightRec in pairs(nvRecords) do
-                    if lightRec.fixture == fixture and lightRec.broken then
-                        isBroken = true
-                        break
-                    end
-                end
+            if part.Parent then
                 pcall(function()
-                    part.Transparency = isBroken and 1 or rec.initialTransparency
+                    part.Transparency = rec.initialTransparency
+                    part.Material = rec.initialMaterial
+                    part.Color = rec.initialColor
+                    part.Reflectance = rec.initialReflectance
                 end)
+            end
+        end
+        for light, rec in pairs(nvRecords) do
+            if rec.fixture and rec.fixture.Parent then
+                pcall(function() rec.fixture:SetAttribute("HackPanelNVVisualChecked", nil) end)
             end
         end
         table.clear(nvRecords)
         table.clear(nvVisualRecords)
+        table.clear(nvReferenceByName)
+        nvReferenceDefault = nil
+        nvReferenceReady = false
         nvLabel.Text = "Night Vision: OFF"
     end
     local function enableNightVision()
@@ -1461,10 +1559,37 @@ local function createMenu()
         nightVisionEnabled = true
         nvGeneration += 1
         local generation = nvGeneration
+        -- Collect a real Neon bulb from templates first, then existing lit rooms.
+        -- Scans are batched, run only on activation, and do not block the UI.
+        task.spawn(function()
+            local replicated = game:GetService("ReplicatedStorage")
+            nvCollectReferences(replicated, generation, false)
+            if not nvReferenceDefault then
+                nvCollectReferences(rooms, generation, true)
+            end
+            if nightVisionEnabled and generation == nvGeneration then
+                nvReferenceReady = true
+            end
+        end)
+        -- Newly streamed lights are discovered without a full room traversal.
+        nvRoomConnection = rooms.DescendantAdded:Connect(function(obj)
+            if nightVisionEnabled and generation == nvGeneration and nvIsLight(obj) then
+                nvRegister(obj)
+            end
+        end)
+        -- First discovery is distributed across frames to prevent a freeze.
+        task.spawn(function()
+            local descendants = rooms:GetDescendants()
+            for i, obj in ipairs(descendants) do
+                if not nightVisionEnabled or generation ~= nvGeneration then return end
+                if nvIsLight(obj) then nvRegister(obj) end
+                if i % 175 == 0 then task.wait() end
+            end
+        end)
         task.spawn(function()
             while nightVisionEnabled and generation == nvGeneration do
                 pcall(nvTick, rooms)
-                task.wait(0.4)
+                task.wait(1.0)
             end
         end)
     end
@@ -1784,7 +1909,14 @@ local function createMenu()
         entityHudItems[obj] = nil
     end
     local lastAmbushSample = 0
+    local lastEntityHudUpdate = 0
     local entityHudConnection = RunService.RenderStepped:Connect(function()
+        if not isCurrentRun() then return end
+        -- Entity labels and tracers do not need to update at full FPS.
+        local hudNow = os.clock()
+        if hudNow - lastEntityHudUpdate < 0.10 then return end
+        lastEntityHudUpdate = hudNow
+        if not entityEspEnabled then return end
         local sampleAmbush = os.clock() - lastAmbushSample >= 0.08
         if sampleAmbush then lastAmbushSample = os.clock() end
         local camera = workspace.CurrentCamera
@@ -1820,10 +1952,8 @@ local function createMenu()
                 hud.tracer.Visible = false
             else
                 local worldPosition = part.Position
-                if obj:IsA("Model") then
-                    local ok, cf = pcall(function() return obj:GetBoundingBox() end)
-                    if ok then worldPosition = cf.Position end
-                end
+                -- BoundingBox() on animated multi-part models every frame is
+                -- expensive; the tracked physical part is sufficient for HUD.
                 local projected, onScreen = camera:WorldToViewportPoint(worldPosition)
                 local visible = onScreen and projected.Z > 0
                 -- Independent warnings: both ESP and this entity's confirmed
@@ -1868,8 +1998,51 @@ local function createMenu()
         end
     end)
     local lastSeen = {}
+    -- Incremental descendant traversal: unlike GetDescendants(), this yields
+    -- every small batch, avoiding a large CPU/allocation spike in one frame.
+    local function collectWorldNodesCooperatively()
+        local nodes = {}
+        local pending = workspace:GetChildren()
+        local index = 1
+        local processed = 0
+        while index <= #pending do
+            if not isCurrentRun() or not menuGui or not menuGui.Parent then
+                return nil
+            end
+            local obj = pending[index]
+            index += 1
+            nodes[#nodes + 1] = obj
+            for _, child in ipairs(obj:GetChildren()) do
+                pending[#pending + 1] = child
+            end
+            processed += 1
+            if processed >= 100 then
+                processed = 0
+                task.wait()
+            end
+        end
+        return nodes
+    end
     local function refreshEntities()
         local found, present = {}, {}
+        local candidates = {}
+        local ambushPositions = {}
+        if entityEspEnabled then
+            -- One workspace traversal, never one nested traversal per Rush.
+            local worldNodes = collectWorldNodesCooperatively()
+            if not worldNodes then return end
+            for i, obj in ipairs(worldNodes) do
+                if i % 150 == 0 then task.wait() end
+                local name = getEntityName(obj)
+                if name then
+                    candidates[#candidates + 1] = obj
+                    if name == "Ambush" then
+                        local part = getEntityPart(obj)
+                        if part then ambushPositions[#ambushPositions + 1] = part.Position end
+                    end
+                end
+            end
+        end
         local function inspect(obj)
             local name = getEntityName(obj)
             if not name or obj:IsDescendantOf(Players) then return end
@@ -1885,13 +2058,8 @@ local function createMenu()
             if name == "Rush" then
                 local rushPart = getEntityPart(obj)
                 if rushPart then
-                    for _, candidate in ipairs(workspace:GetDescendants()) do
-                        if candidate ~= obj and getEntityName(candidate) == "Ambush" then
-                            local ambushPart = getEntityPart(candidate)
-                            if ambushPart and (rushPart.Position - ambushPart.Position).Magnitude < 5 then
-                                return
-                            end
-                        end
+                    for _, ambushPosition in ipairs(ambushPositions) do
+                        if (rushPart.Position - ambushPosition).Magnitude < 5 then return end
                     end
                 end
             end
@@ -1933,7 +2101,7 @@ local function createMenu()
                 -- with always-on-top 3D boxes instead.
                 local boxes = {}
                 local function adorn(part)
-                    if not part:IsA("BasePart") or #boxes >= 32 then return end
+                    if not part:IsA("BasePart") or #boxes >= 8 then return end
                     local box = Instance.new("BoxHandleAdornment")
                     box.Name = "HackPanelEntityBox"
                     box.Adornee = part
@@ -1957,9 +2125,7 @@ local function createMenu()
             end
         end
         if entityEspEnabled then
-            for _, obj in ipairs(workspace:GetDescendants()) do
-                if getEntityName(obj) then inspect(obj) end
-            end
+            for _, obj in ipairs(candidates) do inspect(obj) end
         end
         for obj in pairs(entityHighlights) do
             if not entityEspEnabled or not found[obj] then clearHighlight(obj) end
@@ -2011,8 +2177,10 @@ local function createMenu()
         end
         local detected, rushPositions, ambushPositions = {}, {}, {}
         local seen = {}
-        local objects = workspace:GetDescendants()
-        for _, obj in ipairs(objects) do
+        local objects = collectWorldNodesCooperatively()
+        if not objects then return end
+        for i, obj in ipairs(objects) do
+            if i % 150 == 0 then task.wait() end
             local name = getEntityName(obj)
             if name and activeWarnings[name] and not obj:IsDescendantOf(Players) then
                 local isLive = true
@@ -2079,12 +2247,12 @@ local function createMenu()
         warningPresent = detected
     end
     task.spawn(function()
-        while menuGui and menuGui.Parent do
+        while isCurrentRun() and menuGui and menuGui.Parent do
             local ok, err = pcall(updateWarningMonitor)
             if not ok then
                 warningStatus.Text = "Warning monitor error: " .. tostring(err):sub(1,110)
             end
-            task.wait(0.65)
+            task.wait(1.0)
         end
         alertBanner.Visible = false
         if alertGui.Parent then alertGui:Destroy() end
@@ -2092,17 +2260,17 @@ local function createMenu()
     entityEspButton.MouseButton1Click:Connect(function()
         entityEspEnabled = not entityEspEnabled
         entityEspButton.Text = entityEspEnabled and "ENTITY WALL ESP: ON" or "ENTITY WALL ESP: OFF"
-        refreshEntities()
+        -- The scheduled scan loop below will refresh without overlapping scans.
     end)
     task.spawn(function()
-        while menuGui and menuGui.Parent do
+        while isCurrentRun() and menuGui and menuGui.Parent do
             local ok, err = pcall(refreshEntities)
             if not ok then
                 espInfo.Text = "ESP error: " .. tostring(err):sub(1,140)
                 -- ESP errors must not overwrite the independent warning status.
                 espInfo.Text = "ESP detection error: " .. tostring(err):sub(1,140)
             end
-            task.wait(0.6)
+            task.wait(2.0)
         end
         for obj in pairs(entityHighlights) do clearHighlight(obj) end
         for obj in pairs(entityHudItems) do removeEntityHud(obj) end
@@ -3549,9 +3717,18 @@ local function createMenu()
                 addSample(roomCF:PointToWorldSpace(Vector3.new(localX, 0, localZ)))
             end
         end
+        -- Prioritize nearby wall candidates; stop after enough verified choices.
+        -- If the quick pass finds none, still search a substantial portion.
+        table.sort(samples, function(a, b)
+            local ax, az = a.X - root.Position.X, a.Z - root.Position.Z
+            local bx, bz = b.X - root.Position.X, b.Z - root.Position.Z
+            return ax * ax + az * az < bx * bx + bz * bz
+        end)
         local checked = 0
         local groundCandidates, losCandidates, wallCandidates = 0, 0, 0
+        local sampleBudget = debugMode == "LOS" and 1400 or 1000
         for _, world in ipairs(samples) do
+                if checked >= sampleBudget or (#choices >= 8 and checked >= 220) then break end
                 if not navigationActive(generation) then return false, "Cancelled" end
                 checked += 1
                 searchCounts.sampled += 1
@@ -3575,7 +3752,9 @@ local function createMenu()
                     and roomForPosition(ground.Position + Vector3.new(0, 2.5, 0)) == current then
                     groundCandidates += 1
                     searchCounts.ground += 1
-                    showSearchCandidate(ground.Position, "ground", checked)
+                    if debugMode == "LOS" and searchVisualEnabled and checked % 10 == 0 then
+                        showSearchCandidate(ground.Position, "ground", checked)
+                    end
                     -- This is a proximity safety gate: a route that passes
                     -- within a few studs of the candidate is not a hiding
                     -- destination even when a thin object interrupts one ray.
@@ -3600,7 +3779,9 @@ local function createMenu()
                     if not tooCloseToRoute and (standingBlocked or crouchBlocked) then
                         losCandidates += 1
                         searchCounts.los += 1
-                        showSearchCandidate(ground.Position + Vector3.new(0, 0.55, 0), "los", checked)
+                        if debugMode == "LOS" and searchVisualEnabled then
+                            showSearchCandidate(ground.Position + Vector3.new(0, 0.55, 0), "los", checked)
+                        end
                         -- The simulated route may bend around corners; a wall
                         -- blocking an earlier waypoint need not block rushPos.
                         local blocker = nil
@@ -3639,6 +3820,7 @@ local function createMenu()
                             }) do
                                 if protectedFromApproach(approachOrigins, ground.Position + offset, crouch) then
                                     robust += 1
+                                    if robust >= 2 then break end
                                 end
                             end
                             if robust >= 2 then
