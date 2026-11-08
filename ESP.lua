@@ -1178,5 +1178,144 @@ end
         nextDoorGui:Destroy()
     end)
 
+    -- DOOR 50 LIBRARY BOOK ESP: independent of the Key, Door and Entity toggles.
+    -- The only required book name is LiveHintBook, anywhere under Room 50/Assets.
+    local bookEspEnabled = false
+    local bookColor = Color3.fromRGB(55, 155, 255)
+    local bookButton = makeButton(hotelPages.ESP, "BOOK ESP: OFF",
+        UDim2.new(0.5, -130, 0, 216), UDim2.fromOffset(260, 42))
+    bookButton.ZIndex = 42
+    espInfo.Position = UDim2.new(0, 10, 0, 274)
+    espInfo.Size = UDim2.new(1, -20, 0, 48)
+
+    local bookGui = Instance.new("ScreenGui")
+    bookGui.Name = "HackPanelBookESP"
+    bookGui.IgnoreGuiInset = true
+    bookGui.ResetOnSpawn = false
+    bookGui.DisplayOrder = 952
+    bookGui.Parent = PlayerGui
+
+    local bookTargets = {}
+    local bookAssets, bookAddedConnection = nil, nil
+    local function removeBook(book)
+        local target = bookTargets[book]
+        if not target then return end
+        if target.highlight then target.highlight:Destroy() end
+        if target.label then target.label:Destroy() end
+        if target.tracer then target.tracer:Destroy() end
+        bookTargets[book] = nil
+    end
+    local function clearBooks()
+        for book in pairs(bookTargets) do removeBook(book) end
+    end
+    local function bookPart(book)
+        if book:IsA("BasePart") then return book end
+        if book:IsA("Model") and book.PrimaryPart then return book.PrimaryPart end
+        return book:FindFirstChildWhichIsA("BasePart", true)
+    end
+    local function addBook(book)
+        if not bookEspEnabled or bookTargets[book] or book.Name ~= "LiveHintBook" then return end
+        if not bookAssets or not book:IsDescendantOf(bookAssets) then return end
+        local part = bookPart(book)
+        if not part then return end
+        local highlight = Instance.new("Highlight")
+        highlight.Name = "HackPanelBookHighlight"
+        highlight.Adornee = book:IsA("Model") and book or part
+        highlight.FillColor = bookColor
+        highlight.OutlineColor = bookColor
+        highlight.FillTransparency = 0.3
+        highlight.OutlineTransparency = 0
+        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        highlight.Parent = bookGui
+        local label = createEntityInfoBox(bookGui, bookColor, "BookDistance")
+        local tracer = Instance.new("Frame")
+        tracer.Name = "BookTracer"
+        tracer.BackgroundColor3 = bookColor
+        tracer.BorderSizePixel = 0
+        tracer.AnchorPoint = Vector2.new(0.5, 0.5)
+        tracer.ZIndex = 98
+        tracer.Visible = false
+        tracer.Parent = bookGui
+        bookTargets[book] = {part=part, highlight=highlight, label=label, tracer=tracer}
+    end
+    local function refreshBooks()
+        if not bookEspEnabled then
+            if bookAddedConnection then bookAddedConnection:Disconnect(); bookAddedConnection = nil end
+            bookAssets = nil
+            clearBooks()
+            return
+        end
+        local rooms = workspace:FindFirstChild("CurrentRooms")
+        local room50 = rooms and rooms:FindFirstChild("50")
+        local assets = room50 and room50:FindFirstChild("Assets")
+        if assets ~= bookAssets then
+            if bookAddedConnection then bookAddedConnection:Disconnect(); bookAddedConnection = nil end
+            clearBooks()
+            bookAssets = assets
+            if assets then
+                bookAddedConnection = assets.DescendantAdded:Connect(function(descendant)
+                    if descendant.Name == "LiveHintBook" then
+                        task.defer(function() if isCurrentRun() then addBook(descendant) end end)
+                    else
+                        local ancestor = descendant:FindFirstAncestor("LiveHintBook")
+                        if ancestor then task.defer(function() if isCurrentRun() then addBook(ancestor) end end) end
+                    end
+                end)
+                for _, descendant in ipairs(assets:GetDescendants()) do
+                    if descendant.Name == "LiveHintBook" then addBook(descendant) end
+                end
+            end
+        end
+        for book, target in pairs(bookTargets) do
+            if not book.Parent or not bookAssets or not book:IsDescendantOf(bookAssets)
+                or not target.part or not target.part:IsDescendantOf(book) then
+                removeBook(book)
+            end
+        end
+    end
+    bookButton.MouseButton1Click:Connect(function()
+        bookEspEnabled = not bookEspEnabled
+        bookButton.Text = bookEspEnabled and "BOOK ESP: ON" or "BOOK ESP: OFF"
+        refreshBooks()
+    end)
+    local bookRenderConnection = RunService.RenderStepped:Connect(function()
+        if not isCurrentRun() or not bookEspEnabled then return end
+        local camera = workspace.CurrentCamera
+        if not camera then return end
+        local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        local from = UserInputService:GetMouseLocation()
+        for book, target in pairs(bookTargets) do
+            local part = target.part
+            if not book.Parent or not part or not part.Parent then
+                removeBook(book)
+            else
+                local projected, visible = camera:WorldToViewportPoint(part.Position)
+                visible = visible and projected.Z > 0
+                target.label.Visible = visible
+                target.tracer.Visible = visible
+                if visible then
+                    local distance = root and math.floor((root.Position - part.Position).Magnitude + 0.5) or 0
+                    target.label.Text = string.format("BOOK  |  %d studs", distance)
+                    target.label.Position = UDim2.fromOffset(projected.X, projected.Y + 46)
+                    local to = Vector2.new(projected.X, projected.Y)
+                    local diff = to - from
+                    target.tracer.Position = UDim2.fromOffset((from.X + to.X)/2, (from.Y + to.Y)/2)
+                    target.tracer.Size = UDim2.fromOffset(diff.Magnitude, 2)
+                    target.tracer.Rotation = math.deg(math.atan2(diff.Y, diff.X))
+                end
+            end
+        end
+    end)
+    task.spawn(function()
+        while isCurrentRun() and menuGui and menuGui.Parent do
+            refreshBooks()
+            task.wait(0.4)
+        end
+        if bookAddedConnection then bookAddedConnection:Disconnect() end
+        clearBooks()
+        bookRenderConnection:Disconnect()
+        bookGui:Destroy()
+    end)
+
     showHotelTab("Auto")
 
