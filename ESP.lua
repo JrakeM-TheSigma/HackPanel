@@ -1041,7 +1041,7 @@ end
         entityHud:Destroy()
         alertGui:Destroy()
     end)
-    -- NEXT DOOR ESP: target exactly the numbered room after the player's room.
+    -- NEXT DOOR ESP: target the exit Door in the player's current room.
     -- This is independent of Entity ESP and does not select the furthest preloaded room.
     -- Reflow the three Hotel ESP controls so none overlaps another.
     -- Key ESP (Core.lua): y=42..82; Next Door: y=98..140;
@@ -1112,10 +1112,10 @@ end
             clearNextDoorTarget()
             return
         end
+        -- In DOORS, the current room owns the exit Door leading to the next room.
+        -- Do not select the preloaded next room's own exit door.
         local nextNumber = currentNumber + 1
-        local nextRoom = rooms:FindFirstChild(tostring(nextNumber))
-        -- Only the actual Door directly under the next numbered room.
-        local door = nextRoom and nextRoom:FindFirstChild("Door")
+        local door = currentRoom:FindFirstChild("Door")
         local part = chooseNextDoorPart(door)
         if part ~= nextDoorPart or nextNumber ~= nextDoorRoomNumber then
             clearNextDoorTarget()
