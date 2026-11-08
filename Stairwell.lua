@@ -332,7 +332,7 @@
     end
 
     -- Separate function keeps home-screen locals out of createMenu register allocation.
-    (function()
+    ;(function()
     -- Main menu is a vertical list. More categories can be added here later.
     local homePanel = Instance.new("Frame")
     homePanel.Name = "HomePanel"
