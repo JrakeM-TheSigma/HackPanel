@@ -641,5 +641,192 @@
 
     end)
 
+    -- Door 50 Library Solver: isolated function to avoid Luau's 200-local register limit.
+    ;(function()
+        local page = hotelPages.Auto
+        local button = makeButton(page, "SOLVE LIBRARY PUZZLE", UDim2.new(0.5, 12, 0, 292), UDim2.fromOffset(258, 38))
+        button.Name = "HackPanelLibrarySolver"
+        button.ZIndex = 36
+
+        local symbols = {"circle", "pentagon", "square", "hexagon", "triangle", "star", "x", "diamond"}
+        local aliases = {
+            circle = {"circle", "○", "◯", "◦"},
+            pentagon = {"pentagon", "⬟", "⬠"},
+            square = {"square", "□", "▢", "▣"},
+            hexagon = {"hexagon", "⬡", "⬢"},
+            triangle = {"triangle", "△", "▲"},
+            star = {"star", "☆", "★"},
+            x = {"cross", "×", "✕", " x "},
+            diamond = {"diamond", "◇", "◆"},
+        }
+        local function identify(value)
+            local lower = tostring(value):lower()
+            for _, name in ipairs(symbols) do
+                for _, alias in ipairs(aliases[name]) do
+                    if lower:find(alias, 1, true) then return name end
+                end
+            end
+        end
+        local function readClues()
+            local values, order = {}, {}
+            -- Examine locally replicated values and UI text. Never invent missing clues.
+            local roots = {LocalPlayer, PlayerGui}
+            local rooms = getCurrentRooms()
+            if rooms then
+                local library = rooms:FindFirstChild("50")
+                if library then table.insert(roots, library) end
+            end
+            local function ingest(text)
+                local s = tostring(text)
+                local shape, digit
+                for _, name in ipairs(symbols) do
+                    for _, alias in ipairs(aliases[name]) do
+                        local escaped = alias:gsub("([^%w])", "%%%1")
+                        local n = s:lower():match(escaped .. "%s*[:=]%s*(%d)")
+                        if n then shape, digit = name, tonumber(n); break end
+                    end
+                    if shape then break end
+                end
+                if shape and digit then values[shape] = digit end
+                -- Roman-number labels are only trusted when paired with a shape.
+                local roman = {I=1, II=2, III=3, IV=4, V=5}
+                for token, index in pairs(roman) do
+                    local word = s:match("^%s*" .. token .. "%s*[:=]%s*(.-)%s*$")
+                    local named = word and identify(word)
+                    if named then order[index] = named end
+                end
+            end
+            for _, root in ipairs(roots) do
+                for _, object in ipairs(root:GetDescendants()) do
+                    if object:IsA("TextLabel") or object:IsA("TextButton") then
+                        if object.Visible then ingest(object.Text) end
+                    elseif object:IsA("StringValue") then
+                        ingest(object.Name .. "=" .. object.Value)
+                        ingest(object.Value)
+                    elseif object:IsA("IntValue") or object:IsA("NumberValue") then
+                        ingest(object.Name .. "=" .. tostring(object.Value))
+                    end
+                    for _, attribute in ipairs({"Symbol", "Shape", "Digit", "Code", "Hint"}) do
+                        local val = object:GetAttribute(attribute)
+                        if val ~= nil then ingest(object.Name .. "=" .. tostring(val)) end
+                    end
+                end
+            end
+            return values, order
+        end
+
+        local dialog = Instance.new("Frame")
+        dialog.Name = "LibrarySolverDialog"
+        dialog.Size = UDim2.fromOffset(430, 365)
+        dialog.AnchorPoint = Vector2.new(0.5, 0.5)
+        dialog.Position = UDim2.fromScale(0.5, 0.5)
+        dialog.BackgroundColor3 = Color3.fromRGB(30, 24, 25)
+        dialog.BorderSizePixel = 0
+        dialog.ZIndex = 100
+        dialog.Visible = false
+        dialog.Parent = page
+        Instance.new("UICorner", dialog).CornerRadius = UDim.new(0, 12)
+        local stroke = Instance.new("UIStroke", dialog)
+        stroke.Color = Color3.fromRGB(220, 183, 145)
+        stroke.Thickness = 2
+        local function label(text, y, height)
+            local obj = Instance.new("TextLabel")
+            obj.BackgroundTransparency = 1
+            obj.Position = UDim2.fromOffset(15, y)
+            obj.Size = UDim2.new(1, -30, 0, height)
+            obj.Text = text
+            obj.TextColor3 = Color3.fromRGB(255, 232, 206)
+            obj.Font = Enum.Font.Gotham
+            obj.TextSize = 14
+            obj.TextWrapped = true
+            obj.ZIndex = 102
+            obj.Parent = dialog
+            return obj
+        end
+        label("DOOR 50 • LIBRARY SOLVER", 12, 24).Font = Enum.Font.GothamBold
+        local status = label("Reading collected clues...", 39, 39)
+        local inputs = {}
+        local function field(name, x, y, width)
+            local input = Instance.new("TextBox")
+            input.Name = name
+            input.Position = UDim2.fromOffset(x, y)
+            input.Size = UDim2.fromOffset(width, 31)
+            input.BackgroundColor3 = Color3.fromRGB(65, 52, 51)
+            input.TextColor3 = Color3.new(1, 1, 1)
+            input.PlaceholderColor3 = Color3.fromRGB(180, 170, 165)
+            input.PlaceholderText = name
+            input.Text = ""
+            input.TextSize = 14
+            input.Font = Enum.Font.Gotham
+            input.ClearTextOnFocus = false
+            input.ZIndex = 103
+            input.Parent = dialog
+            Instance.new("UICorner", input).CornerRadius = UDim.new(0, 5)
+            return input
+        end
+        label("Book values (0–9), in this order:", 86, 20)
+        local short = {"Circle", "Pentagon", "Square", "Hexagon", "Triangle", "Star", "X", "Diamond"}
+        for i, name in ipairs(symbols) do
+            local col = (i - 1) % 4
+            local row = math.floor((i - 1) / 4)
+            inputs[name] = field(short[i], 15 + col * 102, 110 + row * 41, 94)
+        end
+        label("Paper order (I–V): type symbol names", 195, 20)
+        local orderInputs = {}
+        for i = 1, 5 do
+            orderInputs[i] = field(({"I", "II", "III", "IV", "V"})[i], 15 + (i - 1) * 81, 220, 75)
+        end
+        local result = label("", 257, 42)
+        result.Font = Enum.Font.GothamBold
+        result.TextSize = 19
+        local solve = makeButton(dialog, "CALCULATE CODE", UDim2.fromOffset(15, 310), UDim2.fromOffset(248, 39))
+        solve.ZIndex = 104
+        local close = makeButton(dialog, "CLOSE", UDim2.fromOffset(275, 310), UDim2.fromOffset(140, 39))
+        close.ZIndex = 104
+        close.MouseButton1Click:Connect(function() dialog.Visible = false end)
+        local function fillDetected()
+            local values, order = readClues()
+            local count = 0
+            for _, name in ipairs(symbols) do
+                if values[name] ~= nil then
+                    inputs[name].Text = tostring(values[name])
+                    count += 1
+                end
+            end
+            for i = 1, 5 do
+                if order[i] then orderInputs[i].Text = order[i] end
+            end
+            status.Text = "Detected " .. count .. "/8 book values. Fill any missing values and the paper order below."
+        end
+        local function calculate()
+            local values = {}
+            for _, name in ipairs(symbols) do
+                local raw = inputs[name].Text
+                local digit = tonumber(raw)
+                if digit and digit % 1 == 0 and digit >= 0 and digit <= 9 then
+                    values[name] = digit
+                end
+            end
+            local code = ""
+            for i = 1, 5 do
+                local shape = identify(orderInputs[i].Text)
+                if not shape or values[shape] == nil then
+                    result.Text = "Missing/invalid clue for position " .. i
+                    return
+                end
+                code ..= tostring(values[shape])
+            end
+            result.Text = "LIBRARY CODE: " .. code
+        end
+        solve.MouseButton1Click:Connect(calculate)
+        button.MouseButton1Click:Connect(function()
+            dialog.Visible = not dialog.Visible
+            if dialog.Visible then
+                fillDetected()
+                result.Text = ""
+            end
+        end)
+    end)()
+
     -- Stairwell door counter: separate HUD in the upper-right of the screen.
     -- It reads the local player's current numbered room, not team progress.
