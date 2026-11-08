@@ -1042,7 +1042,7 @@ end
         alertGui:Destroy()
     end)
     -- Isolate Next Door ESP locals from the large createMenu register frame.
-    (function()
+    ;(function()
     -- NEXT DOOR ESP: target the exit Door in the player's current room.
     -- This is independent of Entity ESP and does not select the furthest preloaded room.
     -- Reflow the three Hotel ESP controls so none overlaps another.
@@ -1183,7 +1183,7 @@ end
     end)()
 
     -- Isolate Book ESP locals; shared GUI helpers are captured as upvalues.
-    (function()
+    ;(function()
     -- DOOR 50 LIBRARY BOOK ESP: independent of the Key, Door and Entity toggles.
     -- The only required book name is LiveHintBook, anywhere under Room 50/Assets.
     local bookEspEnabled = false
