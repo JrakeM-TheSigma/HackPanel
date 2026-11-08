@@ -711,8 +711,18 @@ end
     -- Entity registry: event-driven and limited to relevant containers.
     -- Shared by ESP and Warnings; no recurring full Workspace traversal.
     local entityNodes, entityWatchers = {}, {}
+    local function isFigureCameraMarker(node)
+        if not node then return false end
+        if node.Name:lower() == "figurecampos" then return true end
+        local ancestor = node.Parent
+        while ancestor and ancestor ~= workspace do
+            if ancestor.Name:lower() == "figurecampos" then return true end
+            ancestor = ancestor.Parent
+        end
+        return false
+    end
     local function registerEntity(node)
-        if not node or not node.Parent then return end
+        if not node or not node.Parent or isFigureCameraMarker(node) then return end
         local n = node.Name:lower()
         if getEntityName(node) or n == "shade" or n == "dupe" or n == "seekmovingnewclone" then
             entityNodes[node] = true
@@ -767,7 +777,7 @@ end
     local function collectWorldNodesCooperatively()
         local nodes = {}
         for node in pairs(entityNodes) do
-            if node.Parent and node:IsDescendantOf(workspace) then
+            if node.Parent and node:IsDescendantOf(workspace) and not isFigureCameraMarker(node) then
                 nodes[#nodes+1] = node
             else
                 entityNodes[node] = nil
@@ -786,7 +796,7 @@ end
             for i, obj in ipairs(worldNodes) do
                 if i % 150 == 0 then task.wait() end
                 local name = getEntityName(obj)
-                if name then
+                if name and not isFigureCameraMarker(obj) then
                     candidates[#candidates + 1] = obj
                     if name == "Ambush" then
                         local part = getEntityPart(obj)
@@ -797,7 +807,7 @@ end
         end
         local function inspect(obj)
             local name = getEntityName(obj)
-            if not name or obj:IsDescendantOf(Players) then return end
+            if not name or isFigureCameraMarker(obj) or obj:IsDescendantOf(Players) then return end
             if obj:IsA("Model") and not obj:FindFirstChildWhichIsA("BasePart",true) then return end
             -- Ignore prefabs in common storage/template folders.
             local ancestor = obj.Parent
@@ -945,7 +955,7 @@ end
         for i, obj in ipairs(objects) do
             if i % 150 == 0 then task.wait() end
             local name = getEntityName(obj)
-            if name and activeWarnings[name] and not obj:IsDescendantOf(Players) then
+            if name and not isFigureCameraMarker(obj) and activeWarnings[name] and not obj:IsDescendantOf(Players) then
                 local isLive = true
                 local parent = obj.Parent
                 while parent and parent ~= workspace do
@@ -1043,16 +1053,16 @@ end
     end)
     -- NEXT DOOR ESP: target the exit Door in the player's current room.
     -- This is independent of Entity ESP and does not select the furthest preloaded room.
-    -- Reflow the three Hotel ESP controls so none overlaps another.
-    -- Key ESP (Core.lua): y=42..82; Next Door: y=98..140;
-    -- Entity Wall: y=156..204; status: y=216..272.
-    entityEspButton.Position = UDim2.new(0.5, -155, 0, 156)
-    espInfo.Position = UDim2.new(0, 10, 0, 216)
-    espInfo.Size = UDim2.new(1, -20, 0, 56)
+    -- Compact layout: Key 42..82, Next Door 92..132, Book 142..182,
+    -- Entity 192..234, status 242..272. Keep Book visible in the page.
+    entityEspButton.Position = UDim2.new(0.5, -155, 0, 192)
+    entityEspButton.Size = UDim2.fromOffset(310, 42)
+    espInfo.Position = UDim2.new(0, 10, 0, 242)
+    espInfo.Size = UDim2.new(1, -20, 0, 30)
     local nextDoorEspEnabled = false
     local nextDoorColor = Color3.fromRGB(90, 255, 120)
     local nextDoorButton = makeButton(hotelPages.ESP, "NEXT DOOR ESP: OFF",
-        UDim2.new(0.5, -130, 0, 98), UDim2.fromOffset(260, 42))
+        UDim2.new(0.5, -130, 0, 92), UDim2.fromOffset(260, 40))
     nextDoorButton.ZIndex = 42
 
     local nextDoorGui = Instance.new("ScreenGui")
@@ -1183,10 +1193,9 @@ end
     local bookEspEnabled = false
     local bookColor = Color3.fromRGB(55, 155, 255)
     local bookButton = makeButton(hotelPages.ESP, "BOOK ESP: OFF",
-        UDim2.new(0.5, -130, 0, 216), UDim2.fromOffset(260, 42))
+        UDim2.new(0.5, -130, 0, 142), UDim2.fromOffset(260, 40))
     bookButton.ZIndex = 42
-    espInfo.Position = UDim2.new(0, 10, 0, 274)
-    espInfo.Size = UDim2.new(1, -20, 0, 48)
+    -- Status remains below all four controls; do not push it off the page.
 
     local bookGui = Instance.new("ScreenGui")
     bookGui.Name = "HackPanelBookESP"
@@ -1218,15 +1227,17 @@ end
         if not bookAssets or not book:IsDescendantOf(bookAssets) then return end
         local part = bookPart(book)
         if not part then return end
-        local highlight = Instance.new("Highlight")
-        highlight.Name = "HackPanelBookHighlight"
-        highlight.Adornee = book:IsA("Model") and book or part
-        highlight.FillColor = bookColor
-        highlight.OutlineColor = bookColor
-        highlight.FillTransparency = 0.3
-        highlight.OutlineTransparency = 0
-        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-        highlight.Parent = bookGui
+        -- BoxHandleAdornment reliably draws through walls and targets only the book part.
+        local highlight = Instance.new("BoxHandleAdornment")
+        highlight.Name = "HackPanelBookBox"
+        highlight.Adornee = part
+        highlight.Size = part.Size + Vector3.new(0.12, 0.12, 0.12)
+        highlight.CFrame = CFrame.new()
+        highlight.AlwaysOnTop = true
+        highlight.ZIndex = 10
+        highlight.Transparency = 0.35
+        highlight.Color3 = bookColor
+        highlight.Parent = workspace.CurrentCamera or workspace
         local label = createEntityInfoBox(bookGui, bookColor, "BookDistance")
         local tracer = Instance.new("Frame")
         tracer.Name = "BookTracer"
@@ -1263,6 +1274,13 @@ end
                 end)
                 for _, descendant in ipairs(assets:GetDescendants()) do
                     if descendant.Name == "LiveHintBook" then addBook(descendant) end
+                end
+            end
+        end
+        if assets then
+            for _, descendant in ipairs(assets:GetDescendants()) do
+                if descendant.Name == "LiveHintBook" and not bookTargets[descendant] then
+                    addBook(descendant)
                 end
             end
         end
