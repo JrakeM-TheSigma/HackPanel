@@ -524,11 +524,50 @@ end
         end
         return nil
     end
-    local function getEntityPart(obj)
+    -- DoorFake contains decorations and sometimes Dupe visual effects.
+    -- Pick the actual door panel, never an arbitrary first descendant.
+    local function getDupeDoorPart(obj)
         local door = getDupeDoor(obj)
-        if door then
-            if door:IsA("BasePart") then return door end
-            return door.PrimaryPart or door:FindFirstChildWhichIsA("BasePart", true)
+        if not door then return nil end
+        if door:IsA("BasePart") then return door end
+        local preferred = door:FindFirstChild("Door") or door:FindFirstChild("DoorPart")
+            or door:FindFirstChild("Panel")
+        if preferred and preferred:IsA("BasePart") then return preferred end
+        local best, bestScore = nil, -math.huge
+        for _, part in ipairs(door:GetDescendants()) do
+            if part:IsA("BasePart") then
+                local lower = part.Name:lower()
+                local excluded = lower:find("sign") or lower:find("dupe")
+                    or lower:find("hitbox") or lower:find("trigger")
+                    or lower:find("handle") or lower:find("knob")
+                    or lower:find("particle") or lower:find("effect")
+                local ancestor = part.Parent
+                while ancestor and ancestor ~= door do
+                    local n = ancestor.Name:lower()
+                    if n:find("sign") or n:find("dupe") or n:find("effect") then
+                        excluded = true
+                        break
+                    end
+                    ancestor = ancestor.Parent
+                end
+                if not excluded and part.Transparency < 0.95 then
+                    local size = part.Size
+                    -- A door panel is tall, wide, and relatively thin.
+                    local width = math.max(size.X, size.Z)
+                    local thickness = math.min(size.X, size.Z)
+                    local score = size.Y * width - thickness * 3
+                    if lower == "door" or lower == "doorfake" then score += 1000 end
+                    if size.Y >= 4 and width >= 2 and score > bestScore then
+                        best, bestScore = part, score
+                    end
+                end
+            end
+        end
+        return best
+    end
+    local function getEntityPart(obj)
+        if obj.Name:lower() == "dupe" and obj.Parent and obj.Parent.Name == "SideroomDupe" then
+            return getDupeDoorPart(obj)
         end
         if obj:IsA("BasePart") then return obj end
         return obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart", true)
@@ -807,9 +846,9 @@ end
                 end
             end
             if name == "Dupe" and entityHighlights[obj] then
-                local door = getDupeDoor(obj)
+                local desiredPart = getDupeDoorPart(obj)
                 local firstBox = entityHighlights[obj][1]
-                if door and firstBox and firstBox.Adornee and not firstBox.Adornee:IsDescendantOf(door) then
+                if not desiredPart or not firstBox or firstBox.Adornee ~= desiredPart then
                     clearHighlight(obj)
                 end
             end
@@ -834,11 +873,14 @@ end
                     box.Parent = workspace.CurrentCamera or workspace
                     table.insert(boxes, box)
                 end
-                local visualTarget = getDupeDoor(obj) or obj
-                if visualTarget:IsA("BasePart") then
-                    adorn(visualTarget)
+                if name == "Dupe" and obj.Parent and obj.Parent.Name == "SideroomDupe" then
+                    -- Never fall back to the purple Dupe model if the door isn't ready.
+                    local panel = getDupeDoorPart(obj)
+                    if panel then adorn(panel) end
+                elseif obj:IsA("BasePart") then
+                    adorn(obj)
                 else
-                    for _, part in ipairs(visualTarget:GetDescendants()) do
+                    for _, part in ipairs(obj:GetDescendants()) do
                         adorn(part)
                     end
                 end
