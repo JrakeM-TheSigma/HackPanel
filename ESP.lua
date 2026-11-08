@@ -67,13 +67,8 @@
         entityHudItems[obj] = nil
     end
     local lastAmbushSample = 0
-    local lastEntityHudUpdate = 0
     local entityHudConnection = RunService.RenderStepped:Connect(function()
         if not isCurrentRun() then return end
-        -- Entity labels and tracers do not need to update at full FPS.
-        local hudNow = os.clock()
-        if hudNow - lastEntityHudUpdate < 0.10 then return end
-        lastEntityHudUpdate = hudNow
         if not entityEspEnabled then return end
         local sampleAmbush = os.clock() - lastAmbushSample >= 0.08
         if sampleAmbush then lastAmbushSample = os.clock() end
@@ -452,7 +447,7 @@
             if not ok then
                 warningStatus.Text = "Warning monitor error: " .. tostring(err):sub(1,110)
             end
-            task.wait(1.0)
+            task.wait(0.20)
         end
         alertBanner.Visible = false
         if alertGui.Parent then alertGui:Destroy() end
@@ -470,7 +465,7 @@
                 -- ESP errors must not overwrite the independent warning status.
                 espInfo.Text = "ESP detection error: " .. tostring(err):sub(1,140)
             end
-            task.wait(2.0)
+            task.wait(0.20)
         end
         for obj in pairs(entityHighlights) do clearHighlight(obj) end
         for obj in pairs(entityHudItems) do removeEntityHud(obj) end
