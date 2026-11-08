@@ -514,7 +514,22 @@ end
     local warningPresent = {}
     -- Rush motion tracking: spawn does not necessarily mean an attack is underway.
     local rushMotion = {}
+    -- Dupe's entity object and its visible fake door are siblings under SideroomDupe.
+    -- Keep tracking the Dupe entity for warnings, but anchor ESP to DoorFake.
+    local function getDupeDoor(obj)
+        if obj.Name:lower() ~= "dupe" then return nil end
+        local side = obj.Parent
+        if side and side.Name == "SideroomDupe" then
+            return side:FindFirstChild("DoorFake")
+        end
+        return nil
+    end
     local function getEntityPart(obj)
+        local door = getDupeDoor(obj)
+        if door then
+            if door:IsA("BasePart") then return door end
+            return door.PrimaryPart or door:FindFirstChildWhichIsA("BasePart", true)
+        end
         if obj:IsA("BasePart") then return obj end
         return obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart", true)
     end
@@ -791,6 +806,13 @@ end
                     end
                 end
             end
+            if name == "Dupe" and entityHighlights[obj] then
+                local door = getDupeDoor(obj)
+                local firstBox = entityHighlights[obj][1]
+                if door and firstBox and firstBox.Adornee and not firstBox.Adornee:IsDescendantOf(door) then
+                    clearHighlight(obj)
+                end
+            end
             if entityEspEnabled and not entityHighlights[obj] then
                 -- Keep the proven 3D red entity boxes with ESP regardless of
                 -- Warnings selection. The top INFO box is a separate overlay.
@@ -812,10 +834,11 @@ end
                     box.Parent = workspace.CurrentCamera or workspace
                     table.insert(boxes, box)
                 end
-                if obj:IsA("BasePart") then
-                    adorn(obj)
+                local visualTarget = getDupeDoor(obj) or obj
+                if visualTarget:IsA("BasePart") then
+                    adorn(visualTarget)
                 else
-                    for _, part in ipairs(obj:GetDescendants()) do
+                    for _, part in ipairs(visualTarget:GetDescendants()) do
                         adorn(part)
                     end
                 end
