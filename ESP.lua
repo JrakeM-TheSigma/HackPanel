@@ -1041,5 +1041,135 @@ end
         entityHud:Destroy()
         alertGui:Destroy()
     end)
+    -- NEXT DOOR ESP: target exactly the numbered room after the player's room.
+    -- This is independent of Entity ESP and does not select the furthest preloaded room.
+    local nextDoorEspEnabled = false
+    local nextDoorColor = Color3.fromRGB(90, 255, 120)
+    local nextDoorButton = makeButton(hotelPages.ESP, "NEXT DOOR ESP: OFF",
+        UDim2.new(0.5, -115, 0, 120), UDim2.fromOffset(230, 45))
+    nextDoorButton.ZIndex = 42
+
+    local nextDoorGui = Instance.new("ScreenGui")
+    nextDoorGui.Name = "HackPanelNextDoorESP"
+    nextDoorGui.ResetOnSpawn = false
+    nextDoorGui.IgnoreGuiInset = true
+    nextDoorGui.DisplayOrder = 951
+    nextDoorGui.Parent = PlayerGui
+
+    local nextDoorLabel = createEntityInfoBox(nextDoorGui, nextDoorColor, "NextDoorDistance")
+    local nextDoorTracer = Instance.new("Frame")
+    nextDoorTracer.Name = "NextDoorTracer"
+    nextDoorTracer.BackgroundColor3 = nextDoorColor
+    nextDoorTracer.BorderSizePixel = 0
+    nextDoorTracer.AnchorPoint = Vector2.new(0.5, 0.5)
+    nextDoorTracer.ZIndex = 98
+    nextDoorTracer.Visible = false
+    nextDoorTracer.Parent = nextDoorGui
+
+    local nextDoorBox, nextDoorPart, nextDoorRoomNumber
+    local function clearNextDoorTarget()
+        if nextDoorBox then nextDoorBox:Destroy(); nextDoorBox = nil end
+        nextDoorPart, nextDoorRoomNumber = nil, nil
+        nextDoorLabel.Visible = false
+        nextDoorTracer.Visible = false
+    end
+
+    local function chooseNextDoorPart(door)
+        if not door then return nil end
+        if door:IsA("BasePart") then return door end
+        -- Prefer the moving door slab, not the frame, sign, or collision hitbox.
+        for _, partName in ipairs({"Door", "DoorPanel", "Panel", "Main", "DoorPart"}) do
+            local part = door:FindFirstChild(partName, true)
+            if part and part:IsA("BasePart") and part.Transparency < 1 then return part end
+        end
+        local best, bestArea
+        for _, part in ipairs(door:GetDescendants()) do
+            if part:IsA("BasePart") and part.Transparency < 1 then
+                local n = part.Name:lower()
+                if not (n:find("sign") or n:find("hitbox") or n:find("frame")
+                    or n:find("knob") or n:find("handle") or n:find("collision")) then
+                    local dimensions = {part.Size.X, part.Size.Y, part.Size.Z}
+                    table.sort(dimensions, function(a,b) return a > b end)
+                    local area = dimensions[1] * dimensions[2]
+                    if not bestArea or area > bestArea then best, bestArea = part, area end
+                end
+            end
+        end
+        return best
+    end
+
+    local function refreshNextDoorTarget()
+        if not nextDoorEspEnabled then clearNextDoorTarget(); return end
+        local currentRoom, currentNumber = getCurrentRoom()
+        local rooms = getCurrentRooms()
+        if not currentRoom or not currentNumber or not rooms then
+            clearNextDoorTarget()
+            return
+        end
+        local nextNumber = currentNumber + 1
+        local nextRoom = rooms:FindFirstChild(tostring(nextNumber))
+        -- Only the actual Door directly under the next numbered room.
+        local door = nextRoom and nextRoom:FindFirstChild("Door")
+        local part = chooseNextDoorPart(door)
+        if part ~= nextDoorPart or nextNumber ~= nextDoorRoomNumber then
+            clearNextDoorTarget()
+            if part then
+                nextDoorPart, nextDoorRoomNumber = part, nextNumber
+                nextDoorBox = Instance.new("BoxHandleAdornment")
+                nextDoorBox.Name = "HackPanelNextDoorBox"
+                nextDoorBox.Adornee = part
+                nextDoorBox.Size = part.Size + Vector3.new(0.18, 0.18, 0.18)
+                nextDoorBox.CFrame = CFrame.new()
+                nextDoorBox.AlwaysOnTop = true
+                nextDoorBox.ZIndex = 10
+                nextDoorBox.Transparency = 0.35
+                nextDoorBox.Color3 = nextDoorColor
+                nextDoorBox.Parent = workspace.CurrentCamera or workspace
+            end
+        end
+    end
+
+    nextDoorButton.MouseButton1Click:Connect(function()
+        nextDoorEspEnabled = not nextDoorEspEnabled
+        nextDoorButton.Text = nextDoorEspEnabled and "NEXT DOOR ESP: ON" or "NEXT DOOR ESP: OFF"
+        refreshNextDoorTarget()
+    end)
+
+    local nextDoorRenderConnection = RunService.RenderStepped:Connect(function()
+        if not isCurrentRun() or not nextDoorEspEnabled then return end
+        local part = nextDoorPart
+        local camera = workspace.CurrentCamera
+        if not camera or not part or not part:IsDescendantOf(workspace) then
+            nextDoorLabel.Visible = false
+            nextDoorTracer.Visible = false
+            return
+        end
+        local projected, visible = camera:WorldToViewportPoint(part.Position)
+        visible = visible and projected.Z > 0
+        nextDoorLabel.Visible = visible
+        nextDoorTracer.Visible = visible
+        if not visible then return end
+        local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        local distance = root and math.floor((root.Position - part.Position).Magnitude + 0.5) or 0
+        nextDoorLabel.Text = string.format("NEXT DOOR %d  |  %d studs", nextDoorRoomNumber or 0, distance)
+        nextDoorLabel.Position = UDim2.fromOffset(projected.X, projected.Y + 46)
+        local from = UserInputService:GetMouseLocation()
+        local to = Vector2.new(projected.X, projected.Y)
+        local diff = to - from
+        nextDoorTracer.Position = UDim2.fromOffset((from.X + to.X) / 2, (from.Y + to.Y) / 2)
+        nextDoorTracer.Size = UDim2.fromOffset(diff.Magnitude, 2)
+        nextDoorTracer.Rotation = math.deg(math.atan2(diff.Y, diff.X))
+    end)
+
+    task.spawn(function()
+        while isCurrentRun() and menuGui and menuGui.Parent do
+            refreshNextDoorTarget()
+            task.wait(0.25)
+        end
+        clearNextDoorTarget()
+        nextDoorRenderConnection:Disconnect()
+        nextDoorGui:Destroy()
+    end)
+
     showHotelTab("Auto")
 
