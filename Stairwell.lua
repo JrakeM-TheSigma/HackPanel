@@ -1,3 +1,5 @@
+    -- Keep Stairwell HUD/marker locals in their own register frame.
+    local stairCounterGui, clearStairDoorMarkers, stairCounterButton, stairEspButton = (function()
     local stairCounterGui = Instance.new("ScreenGui")
     stairCounterGui.Name = "HackPanelStairwellDoorCounter"
     stairCounterGui.ResetOnSpawn = false
@@ -157,6 +159,9 @@
         stairEspButton.Text = "STAIRWELL DOOR ESP: " .. (stairEspEnabled and "ON" or "OFF")
         if not stairEspEnabled then clearStairDoorMarkers() end
     end)
+        return stairCounterGui, clearStairDoorMarkers, stairCounterButton, stairEspButton
+    end)()
+
     local function refreshStairControls()
         local isStair = activeFloorName == "THE STAIRWELL"
         stairCounterButton.Visible = isStair
