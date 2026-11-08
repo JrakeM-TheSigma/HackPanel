@@ -44,7 +44,7 @@ end
 -- Configuration
 local TOGGLE_KEY = Enum.KeyCode.LeftAlt
 local CLUSTER_RADIUS_PIXELS = 60
-local SCAN_INTERVAL_SECONDS = 3.0
+local SCAN_INTERVAL_SECONDS = 0.25 -- room transition check only; item spawns are event-driven
 -- Follow the LOCAL PLAYER, not the team's LatestRoom progress.
 -- A teammate can advance LatestRoom while you remain in an older room.
 local function latestRoomNumber()
@@ -115,6 +115,7 @@ local isEspActive = false
 local hotelEspMode = false
 local mainRenderConnection = nil
 local backgroundScanTask = nil
+local disconnectItemWatchers
 local screenGui = nil
 
 local trackedTargets = {}
@@ -187,6 +188,7 @@ local function clearOldESP()
         task.cancel(backgroundScanTask)
         backgroundScanTask = nil
     end
+    if disconnectItemWatchers then disconnectItemWatchers() end
 
     if screenGui then
         screenGui:Destroy()
@@ -301,61 +303,57 @@ end
 -- DISCOVERY
 -- ==========================================================
 
-local function scanAllLocations()
-    if not isEspActive then
-        return
+-- Track only the currently relevant room and Drops. DescendantAdded catches
+-- newly spawned loot immediately, without a repeated full-room scan.
+local itemWatchers = {}
+local watchedRoom, watchedDrops
+local function inspectItem(descendant)
+    if not isEspActive or not descendant or not descendant.Parent then return end
+    if descendant.Name == "KeyJewelry" and (descendant:IsA("Model") or descendant:IsA("BasePart") or descendant:IsA("Tool")) then
+        trackItemInstance(descendant, "KEY JEWELRY", false, "KEYS")
     end
-
-    local function inspect(container)
-        if not container then return end
-        for _, descendant in ipairs(container:GetDescendants()) do
-            -- Keys can appear in Drops, FloorLootItem, DrawerContainer,
-            -- and other room loot containers. Highlight only KeyJewelry itself.
-            if descendant.Name == "KeyJewelry" and (descendant:IsA("Model") or descendant:IsA("BasePart") or descendant:IsA("Tool")) then
-                trackItemInstance(descendant, "KEY JEWELRY", false, "KEYS")
-            end
-
-            -- Keep the existing Candy and SalvageItems ESP discovery.
-            if descendant.Name == "Candy" and not hotelEspMode then
-                trackItemInstance(descendant, "CANDY", false, "CANDY")
-            elseif descendant.Parent
-                and descendant.Parent.Name == "SalvageItems"
-                and descendant.Name ~= "JewelryCase" then
-                trackItemInstance(descendant, nil, false, "ITEMS")
-            end
-
-            -- Additional discovery: every physical item directly inside a
-            -- JewelryCase, regardless of its name (not just ShakeLight).
-            if descendant.Name == "JewelryCase" then
-                for _, item in ipairs(descendant:GetChildren()) do
-                    if item:IsA("Model") or item:IsA("Tool") then
-                        trackItemInstance(item, item.Name, false, "ITEMS")
-                    end
-                end
-            end
-        end
+    if descendant.Name == "Candy" and not hotelEspMode then
+        trackItemInstance(descendant, "CANDY", false, "CANDY")
+    elseif descendant.Parent and descendant.Parent.Name == "SalvageItems" and descendant.Name ~= "JewelryCase" then
+        trackItemInstance(descendant, nil, false, "ITEMS")
     end
-
-    local currentRoom = getCurrentRoom()
-    inspect(currentRoom)
-
-    local dropsFolder = workspace:FindFirstChild("Drops")
-    if dropsFolder then
-        inspect(dropsFolder)
+    if descendant.Parent and descendant.Parent.Name == "JewelryCase" and (descendant:IsA("Model") or descendant:IsA("Tool")) then
+        trackItemInstance(descendant, descendant.Name, false, "ITEMS")
     end
 end
-
-local function startBackgroundLiveScanner()
-    if backgroundScanTask then
-        task.cancel(backgroundScanTask)
+local function watchItemContainer(container)
+    if not container or itemWatchers[container] then return end
+    itemWatchers[container] = container.DescendantAdded:Connect(function(child)
+        -- Defer once to allow item parts/handles to replicate.
+        task.defer(function()
+            if isEspActive and isCurrentRun() then inspectItem(child) end
+        end)
+    end)
+    for _, child in ipairs(container:GetDescendants()) do inspectItem(child) end
+end
+disconnectItemWatchers = function()
+    for _, connection in pairs(itemWatchers) do connection:Disconnect() end
+    table.clear(itemWatchers)
+    watchedRoom, watchedDrops = nil, nil
+end
+local function scanAllLocations()
+    if not isEspActive then return end
+    local room = getCurrentRoom()
+    local drops = workspace:FindFirstChild("Drops")
+    if room ~= watchedRoom or drops ~= watchedDrops then
+        disconnectItemWatchers()
+        watchedRoom, watchedDrops = room, drops
+        watchItemContainer(room)
+        if drops and drops ~= room then watchItemContainer(drops) end
     end
-
+end
+local function startBackgroundLiveScanner()
+    if backgroundScanTask then task.cancel(backgroundScanTask) end
     backgroundScanTask = task.spawn(function()
         while isEspActive and isCurrentRun() do
             scanAllLocations()
             task.wait(SCAN_INTERVAL_SECONDS)
         end
-
         backgroundScanTask = nil
     end)
 end
@@ -400,14 +398,11 @@ local function startEspLoop()
         mainRenderConnection:Disconnect()
     end
 
-    local lastEspDraw = 0
     mainRenderConnection = RunService.RenderStepped:Connect(function()
         if not isCurrentRun() then
             mainRenderConnection:Disconnect()
             return
         end
-        if os.clock() - lastEspDraw < 0.085 then return end
-        lastEspDraw = os.clock()
         if not isEspActive or not screenGui or not screenGui.Parent then
             return
         end
@@ -445,6 +440,7 @@ local function startEspLoop()
                     target.Highlight:Destroy()
                 end
 
+                if activeLines[target] then activeLines[target]:Destroy() end
                 activeLines[target] = nil
                 trackedInstances[item] = nil
                 table.remove(trackedTargets, i)
