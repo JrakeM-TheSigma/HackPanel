@@ -1112,9 +1112,8 @@ end
             clearNextDoorTarget()
             return
         end
-        -- Try the previous room model's Door (current room number - 1).
-        -- The label shows the door number reached by that exit.
-        local targetRoomNumber = currentNumber - 1
+        -- Target the Door belonging to the current room, without an offset.
+        local targetRoomNumber = currentNumber
         local targetRoom = rooms:FindFirstChild(tostring(targetRoomNumber))
         local nextNumber = currentNumber
         local door = targetRoom and targetRoom:FindFirstChild("Door")
