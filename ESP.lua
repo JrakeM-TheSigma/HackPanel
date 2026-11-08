@@ -1043,10 +1043,16 @@ end
     end)
     -- NEXT DOOR ESP: target exactly the numbered room after the player's room.
     -- This is independent of Entity ESP and does not select the furthest preloaded room.
+    -- Reflow the three Hotel ESP controls so none overlaps another.
+    -- Key ESP (Core.lua): y=42..82; Next Door: y=98..140;
+    -- Entity Wall: y=156..204; status: y=216..272.
+    entityEspButton.Position = UDim2.new(0.5, -155, 0, 156)
+    espInfo.Position = UDim2.new(0, 10, 0, 216)
+    espInfo.Size = UDim2.new(1, -20, 0, 56)
     local nextDoorEspEnabled = false
     local nextDoorColor = Color3.fromRGB(90, 255, 120)
     local nextDoorButton = makeButton(hotelPages.ESP, "NEXT DOOR ESP: OFF",
-        UDim2.new(0.5, -115, 0, 120), UDim2.fromOffset(230, 45))
+        UDim2.new(0.5, -130, 0, 98), UDim2.fromOffset(260, 42))
     nextDoorButton.ZIndex = 42
 
     local nextDoorGui = Instance.new("ScreenGui")
