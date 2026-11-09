@@ -512,6 +512,8 @@ end
     -- Live warning state is shared with the ESP renderer. A checked box alone
     -- must not pin an absent entity to the top of the screen.
     local warningPresent = {}
+    -- Commit the banner and its companion info boxes on the same render frame.
+    local warningBannerRequested = false
     -- Rush motion tracking: spawn does not necessarily mean an attack is underway.
     local rushMotion = {}
     -- Dupe's entity object and its visible fake door are siblings under SideroomDupe.
@@ -626,6 +628,8 @@ end
     local lastAmbushSample = 0
     local entityHudConnection = RunService.RenderStepped:Connect(function()
         if not isCurrentRun() then return end
+        -- Both top-of-screen elements use this same frame and detection snapshot.
+        alertBanner.Visible = warningBannerRequested
         if not entityEspEnabled then return end
         local sampleAmbush = os.clock() - lastAmbushSample >= 0.08
         if sampleAmbush then lastAmbushSample = os.clock() end
@@ -996,7 +1000,7 @@ end
             if activeWarnings[name] then anySelected = true break end
         end
         if not anySelected then
-            alertBanner.Visible = false
+            warningBannerRequested = false
             warningStatus.Text = "No warnings selected — check entities above"
             table.clear(warningPresent)
             table.clear(warningRushPositions)
@@ -1064,7 +1068,7 @@ end
                 table.insert(messages, name .. " Is Coming")
             end
         end
-        alertBanner.Visible = #messages > 0
+        warningBannerRequested = #messages > 0
         if #messages > 0 then
             alertBanner.Text = "⚠ " .. table.concat(messages," | ")
             warningStatus.Text = "WARNING: " .. table.concat(messages," | ")
@@ -1081,6 +1085,7 @@ end
             end
             task.wait(0.20)
         end
+        warningBannerRequested = false
         alertBanner.Visible = false
         if alertGui.Parent then alertGui:Destroy() end
     end)
