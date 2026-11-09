@@ -176,11 +176,16 @@
     end
     local function updateChecks()
         local allSelected = true
+        local visibleCount = 0
         for _, name in ipairs(entityList) do
-            checkButtons[name].Checkbox.Tick.Visible = pendingWarnings[name]
-            if not pendingWarnings[name] then allSelected = false end
+            local button = checkButtons[name]
+            button.Checkbox.Tick.Visible = pendingWarnings[name]
+            if button.Visible then
+                visibleCount += 1
+                if not pendingWarnings[name] then allSelected = false end
+            end
         end
-        allCheck.Checkbox.Tick.Visible = allSelected
+        allCheck.Checkbox.Tick.Visible = visibleCount > 0 and allSelected
     end
     for i, name in ipairs(entityList) do
         local button = makeCheckButton(name,i)
@@ -228,6 +233,7 @@
         -- in some clients; resize rows based on visible matches.
         local rows = math.max(1, math.ceil(visibleIndex/3))
         warningLayout.CellSize = UDim2.new(1/3,-8,1/rows,-9)
+        updateChecks()
     end
     modifierButton.MouseButton1Click:Connect(function()
         modifierExtras = not modifierExtras
