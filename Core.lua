@@ -313,7 +313,7 @@ local function createMenu()
     panelVersion.TextSize = 14
     panelVersion.TextXAlignment = Enum.TextXAlignment.Right
     panelVersion.TextColor3 = Color3.fromRGB(210, 184, 158)
-    panelVersion.Text = "v0.1.15"
+    panelVersion.Text = "v0.1.18"
     panelVersion.ZIndex = 3
     panelVersion.Parent = titleBar
 
@@ -669,12 +669,12 @@ local function createMenu()
     rushStatus.Font = Enum.Font.Gotham
     rushStatus.TextSize = 13
     rushStatus.TextColor3 = Color3.fromRGB(255, 231, 206)
-    rushStatus.Text = "Entity auto-hide is off"
+    rushStatus.Text = "Auto Counter is off"
     rushStatus.ZIndex = 36
     rushStatus.Parent = doorPanel
 
     doorPanel.Size = UDim2.new(0.9, 0, 0, 250)
-    local rushButton = makeButton(doorPanel, "ENTITY AUTO-HIDE: OFF", UDim2.new(0.5, -130, 0, 165), UDim2.fromOffset(260, 45))
+    local rushButton = makeButton(doorPanel, "AUTO COUNTER: OFF", UDim2.new(0.5, -130, 0, 165), UDim2.fromOffset(260, 45))
     rushButton.ZIndex = 35
     rushStatus.Position = UDim2.new(0, 10, 0, 215)
 
@@ -771,6 +771,7 @@ local function createMenu()
     doorGo.Position = UDim2.new(0.5, -110, 0, 192)
     rushButton.Parent = hotelPages.Auto
     rushButton.Position = UDim2.new(0.5, -130, 0, 35)
+    rushButton.Size = UDim2.fromOffset(260, 45)
     rushStatus.Parent = hotelPages.Auto
     rushStatus.Position = UDim2.new(0, 10, 0, 83)
     rushStatus.Size = UDim2.new(1, -20, 0, 22)
