@@ -662,25 +662,58 @@
                     if not entered then
                         rushStatus.Text = kind .. " - doorway blocked (no movement/entry)"
                     else
-                        -- Try the wall-side position first, then a farther-left
-                        -- offset to clear the plant. Never return to the door
-                        -- between attempts, and don't keep cycling forever.
-                        local base = center + across * 4.5
-                        local options = {base - right * 3.5, base - right * 6.5,
-                            base + right * 3.5}
-                        for _, target in ipairs(options) do
+                        -- Find the ACTUAL wall surface, rather than stopping at
+                        -- a fixed sideways offset that can leave us exposed.
+                        -- A short ray from the player's live position is cheap.
+                        local function wallTarget(side)
+                            local rayParams = RaycastParams.new()
+                            rayParams.FilterType = Enum.RaycastFilterType.Exclude
+                            rayParams.FilterDescendantsInstances = {character, door.object}
+                            rayParams.IgnoreWater = true
+                            local rayOrigin = root.Position + Vector3.new(0, 2, 0)
+                            local result = workspace:Raycast(rayOrigin, side * 14, rayParams)
+                            if not result or not result.Instance.CanCollide then return nil end
+                            local hit = result.Instance
+                            local name = hit.Name:lower()
+                            if name:find("plant", 1, true) or name:find("pot", 1, true)
+                                or name:find("leaf", 1, true) or name:find("bush", 1, true) then
+                                return nil
+                            end
+                            -- Keep the root about 1.65 studs off the wall so
+                            -- the character collider is pressed close to it.
+                            local position = result.Position + result.Normal * 1.65
+                            return Vector3.new(position.X, root.Position.Y, position.Z)
+                        end
+                        -- Prefer the left side of the side room. If a plant is
+                        -- there, slide farther INSIDE the room, then try again.
+                        local tucked = false
+                        for _, inward in ipairs({0, 3, 5.5}) do
                             if not navigationActive(generation) then return false end
-                            if not plantAt(target, door.object) then
-                                rushStatus.Text = kind .. " - moving against side-room wall..."
-                                if moveQuick(target, 2.2) then
+                            if inward > 0 then
+                                rushStatus.Text = kind .. " - clearing plant along wall..."
+                                moveQuick(root.Position + across * inward, 1.3)
+                            end
+                            for _, side in ipairs({-right, right}) do
+                                local target = wallTarget(side)
+                                if target and not plantAt(target, door.object) then
+                                    rushStatus.Text = kind .. " - pressing against wall..."
+                                    moveQuick(target, 2.1)
                                     local liveSource = entityPosition()
-                                    if liveSource and sightBlocked(liveSource + Vector3.new(0, 2, 0), root.Position + Vector3.new(0, 2, 0)) then
-                                        rushStatus.Text = kind .. " - behind side-room door"
-                                        return true
+                                    local closeToWall = wallTarget(side)
+                                    local wallDistance = closeToWall and flat(closeToWall - root.Position).Magnitude or math.huge
+                                    if wallDistance <= 2.7 and liveSource
+                                        and sightBlocked(liveSource + Vector3.new(0, 2, 0), root.Position + Vector3.new(0, 2, 0)) then
+                                        rushStatus.Text = kind .. " - tucked against side-room wall"
+                                        tucked = true
+                                        break
                                     end
                                 end
                             end
+                            if tucked then break end
                         end
+                        if tucked then return true end
+                        rushStatus.Text = kind .. " - wall not safely reached"
+
                     end
                 end
         end
