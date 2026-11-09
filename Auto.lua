@@ -619,6 +619,7 @@
     -- Ambush uses the same proven navigation/closet input as Rush.
     -- Each rebound: wait for approach, let it pass forward AND return,
     -- then briefly exit only after the return pass is moving away.
+    -- Ambush navigation begins immediately; motion history is sampled in parallel.
     local function handleAmbush()
         if rushBusy then return end
         rushBusy = true
@@ -626,165 +627,133 @@
         local function active()
             return rushAutoEnabled and rushGeneration == generation
         end
+        local motion = {distance = nil, direction = "stationary", nearSeen = false,
+            firstDeparture = false, returned = false, retreat = false,
+            lastSeen = os.clock(), awaySince = nil, towardSince = nil,
+            retreatSince = nil, lastDistance = nil}
+        local monitoring = true
+        task.spawn(function()
+            while monitoring and active() do
+                local d = entityDistance("Ambush")
+                local now = os.clock()
+                if d then
+                    motion.lastSeen = now
+                    motion.distance = d
+                    if d <= 85 then motion.nearSeen = true end
+                    if motion.lastDistance then
+                        local delta = d - motion.lastDistance
+                        local direction = delta > 1 and "away" or (delta < -1 and "toward" or "stationary")
+                        motion.direction = direction
+                        if direction == "away" then
+                            motion.awaySince = motion.awaySince or now
+                            motion.towardSince = nil
+                        elseif direction == "toward" then
+                            motion.towardSince = motion.towardSince or now
+                            motion.awaySince = nil
+                        else
+                            motion.awaySince, motion.towardSince = nil, nil
+                        end
+                        if motion.nearSeen and direction == "away" and d >= 110
+                            and motion.awaySince and now - motion.awaySince >= 0.18 then
+                            motion.firstDeparture = true
+                        end
+                        if motion.firstDeparture and direction == "toward" and d <= 100
+                            and motion.towardSince and now - motion.towardSince >= 0.12 then
+                            motion.returned = true
+                        end
+                        if motion.returned and direction == "away" and d >= 130
+                            and motion.awaySince and now - motion.awaySince >= 0.3 then
+                            motion.retreat = true
+                        end
+                    end
+                    motion.lastDistance = d
+                else
+                    motion.distance = nil
+                    motion.lastDistance = nil
+                    motion.direction = "stationary"
+                    motion.awaySince, motion.towardSince = nil, nil
+                end
+                task.wait(0.06)
+            end
+        end)
         local ok, err = pcall(function()
             local character = LocalPlayer.Character
             local root = character and character:FindFirstChild("HumanoidRootPart")
             if not root then return end
             local candidates = closetCandidates(root.Position)
             local currentRoom = getCurrentRoom()
-            table.sort(candidates, function(a, b)
+            table.sort(candidates, function(a,b)
                 if a.currentRoom ~= b.currentRoom then return a.currentRoom end
                 return a.distance < b.distance
             end)
             local chosen
-            local lastReason = "No hiding spots found"
+            local failure = "No hiding prompts nearby"
             for i, candidate in ipairs(candidates) do
                 if not active() then return end
                 if candidate.currentRoom or adjacentRoomPassable(currentRoom, candidate.room) then
                     rushStatus.Text = "Ambush - reaching " .. (candidate.kind or "hide spot") .. " " .. i .. "/" .. #candidates
                     local reached, reason = walkToCloset(candidate, generation)
                     if reached then chosen = candidate; break end
-                    lastReason = tostring(reason or "Path failed")
+                    failure = tostring(reason or "Path failed")
                 end
             end
             if not chosen then
-                rushStatus.Text = "Ambush - no reachable hiding spot: " .. lastReason
+                rushStatus.Text = "Ambush - no reachable hiding spot: " .. failure
                 return
             end
             local hidden = isActuallyHiding()
-            local missingSince = nil
-            local returnPasses = 0
-            local previousDistance = nil
-            local previousSampleAt = nil
-            local direction = "stationary"
-            local directionSince = os.clock()
-            local lastMovementAt = 0
-            -- Explicit phases prevent the first outward pass from being
-            -- mistaken for a completed return. Stationary samples never
-            -- advance the phase or authorize an exit.
-            local phase = "await_first_pass"
-            local firstPassFarSince = nil
-            local returnNearSince = nil
-            local retreatFarSince = nil
             local lastHideAttempt = 0
-            local function setPhase(nextPhase)
-                phase = nextPhase
-                firstPassFarSince = nil
-                returnNearSince = nil
-                retreatFarSince = nil
-            end
+            local lastExitAttempt = 0
             while active() do
                 local now = os.clock()
-                local distance = entityDistance("Ambush")
-                if not distance then
-                    missingSince = missingSince or now
-                    if now - missingSince >= 2 then
-                        if hidden then
-                            rushStatus.Text = "Ambush gone - leaving closet"
-                            leaveCloset(chosen)
-                        end
-                        rushStatus.Text = "Ambush gone - watching for entities"
-                        return
-                    end
-                else
-                    missingSince = nil
-                    if previousDistance and previousSampleAt then
-                        local delta = distance - previousDistance
-                        local nextDirection = math.abs(delta) < 1.5 and "stationary"
-                            or (delta > 0 and "away" or "toward")
-                        if nextDirection ~= direction then
-                            direction = nextDirection
-                            directionSince = now
-                        end
-                        if nextDirection ~= "stationary" then lastMovementAt = now end
-                    end
-                    local stableAway = direction == "away" and now - directionSince >= 0.18
-                        and now - lastMovementAt <= 0.18
-                    local stableToward = direction == "toward" and now - directionSince >= 0.12
-                        and now - lastMovementAt <= 0.18
-
-                    if not hidden then
-                        -- Don't enter merely because a stationary spawn is
-                        -- nearby. Emergency proximity still takes priority.
-                        local shouldHide = distance <= 65
-                            or (distance <= 220 and stableToward)
-                        if shouldHide and now - lastHideAttempt >= 0.7 then
-                            lastHideAttempt = now
-                            rushStatus.Text = "Ambush approaching - hiding early"
-                            local success, reason = tryHide(chosen, generation)
-                            if success then
-                                hidden = true
-                                setPhase("await_first_pass")
-                            else
-                                rushStatus.Text = "Ambush - hide failed: " .. tostring(reason)
-                            end
-                        elseif direction == "stationary" then
-                            rushStatus.Text = "Ambush stationary - waiting at closet"
+                local distance = motion.distance
+                if now - motion.lastSeen >= 2 then
+                    if hidden then leaveCloset(chosen) end
+                    rushStatus.Text = "Ambush gone - watching for entities"
+                    return
+                end
+                if not hidden then
+                    -- Go to safety immediately, but enter only on approach or emergency proximity.
+                    if distance and (distance <= 65 or
+                        (distance <= 220 and motion.direction == "toward"))
+                        and now - lastHideAttempt >= 0.7 then
+                        lastHideAttempt = now
+                        rushStatus.Text = "Ambush approaching - entering hiding spot"
+                        local success, reason = tryHide(chosen, generation)
+                        if success then
+                            hidden = true
                         else
-                            rushStatus.Text = "Ambush - ready to hide"
+                            rushStatus.Text = "Ambush - hide failed: " .. tostring(reason)
                         end
                     else
-                        if phase == "await_first_pass" then
-                            -- The first pass is complete only after Ambush
-                            -- was near and has traveled away for a while.
-                            if distance <= 75 then
-                                firstPassFarSince = nil
-                                setPhase("await_first_departure")
-                            end
-                        elseif phase == "await_first_departure" then
-                            if stableAway and distance >= 110 then
-                                firstPassFarSince = firstPassFarSince or now
-                                if now - firstPassFarSince >= 0.35 then
-                                    setPhase("await_return")
-                                end
-                            else
-                                firstPassFarSince = nil
-                            end
-                        elseif phase == "await_return" then
-                            if stableToward and distance <= 85 then
-                                returnNearSince = returnNearSince or now
-                                if now - returnNearSince >= 0.12 then
-                                    setPhase("await_return_retreat")
-                                end
-                            else
-                                returnNearSince = nil
-                            end
-                        elseif phase == "await_return_retreat" then
-                            -- Never exit just because the distance is large:
-                            -- the return must have passed, and Ambush must
-                            -- be demonstrably moving AWAY right now.
-                            if stableAway and distance >= 130 then
-                                retreatFarSince = retreatFarSince or now
-                                if now - retreatFarSince >= 0.4 then
-                                    rushStatus.Text = "Ambush returned and retreated - resetting Hide"
-                                    local exited = leaveCloset(chosen)
-                                    if exited then
-                                        hidden = false
-                                        returnPasses += 1
-                                        setPhase("await_first_pass")
-                                        previousDistance = nil
-                                        previousSampleAt = nil
-                                        direction = "stationary"
-                                        directionSince = os.clock()
-                                    else
-                                        rushStatus.Text = "Ambush - exit unconfirmed"
-                                    end
-                                end
-                            else
-                                retreatFarSince = nil
-                            end
-                        end
-                        if hidden then
-                            rushStatus.Text = "Ambush hidden - " .. phase
-                        end
+                        rushStatus.Text = "Ambush - ready at hiding spot"
                     end
-                    previousDistance = distance
-                    previousSampleAt = now
+                else
+                    -- A complete observed return is needed before resetting Hide.
+                    if motion.retreat and now - lastExitAttempt >= 1 then
+                        lastExitAttempt = now
+                        rushStatus.Text = "Ambush return retreated - resetting Hide"
+                        if leaveCloset(chosen) then
+                            hidden = false
+                            motion.nearSeen = false
+                            motion.firstDeparture = false
+                            motion.returned = false
+                            motion.retreat = false
+                        else
+                            rushStatus.Text = "Ambush - exit unconfirmed"
+                        end
+                    else
+                        local phase = not motion.firstDeparture and "await_first_departure"
+                            or (not motion.returned and "await_return"
+                            or "await_return_retreat")
+                        rushStatus.Text = "Ambush hidden - " .. phase
+                    end
                 end
                 task.wait(0.06)
             end
         end)
-        if not ok then rushStatus.Text = "Ambush error: " .. tostring(err):sub(1, 90) end
+        monitoring = false
+        if not ok then rushStatus.Text = "Ambush error: " .. tostring(err):sub(1,90) end
         rushBusy = false
     end
 
