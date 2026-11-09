@@ -539,13 +539,14 @@
     -- Lightweight LOS fallback. No navigation mesh, node grid, or path computation.
     -- Sample only nearby solid walls/door frames, and move directly to a verified
     -- point on the far side. This is a fallback, not a guaranteed safe position.
-    local function tryLineOfSightCover(kind, generation)
+    local function tryLineOfSightCover(kind, generation, debugSource)
         local character = LocalPlayer.Character
         local humanoid = character and character:FindFirstChildOfClass("Humanoid")
         local root = character and character:FindFirstChild("HumanoidRootPart")
         local entity = entityModel(kind)
-        if not humanoid or not root or not entity then return false end
+        if not humanoid or not root or (not entity and not debugSource) then return false end
         local function entityPosition()
+            if debugSource then return debugSource end
             if not entity.Parent then return nil end
             if entity:IsA("BasePart") then return entity.Position end
             local ok, pivot = pcall(function() return entity:GetPivot() end)
@@ -556,7 +557,7 @@
             if delta.Magnitude < 0.5 then return false end
             local params = RaycastParams.new()
             params.FilterType = Enum.RaycastFilterType.Exclude
-            params.FilterDescendantsInstances = {character, entity}
+            params.FilterDescendantsInstances = entity and {character, entity} or {character}
             params.IgnoreWater = true
             local hit = workspace:Raycast(from, delta, params)
             if not hit then return false end
@@ -645,7 +646,11 @@
         if success then
             rushStatus.Text = kind .. " - behind solid cover"
             -- Keep monitoring actual LOS; entity may change position.
-            while navigationActive(generation) and entity.Parent do
+            if debugSource then
+                rushStatus.Text = "DEBUG LOS: cover reached (simulated threat)"
+                return true
+            end
+            while navigationActive(generation) and entity and entity.Parent do
                 local pos = entityPosition()
                 if not pos or not sightBlocked(pos + Vector3.new(0, 2, 0), root.Position + Vector3.new(0, 2, 0)) then
                     rushStatus.Text = kind .. " - cover exposed!"
@@ -1031,6 +1036,10 @@
     local debugClosetButton = makeButton(hotelPages.Auto, "DEBUG: CLOSETS",
         UDim2.new(0.5, -266, 0, 292), UDim2.fromOffset(258, 38))
     debugClosetButton.ZIndex = 36
+    -- Explicit LOS-only test; never attempts a closet or presses E.
+    local debugLOSButton = makeButton(hotelPages.Auto, "DEBUG: LOS",
+        UDim2.new(0.5, -130, 0, 385), UDim2.fromOffset(260, 38))
+    debugLOSButton.ZIndex = 36
 
     local function startDebug(mode)
         if rushBusy or debugMode then
@@ -1050,6 +1059,17 @@
         rushBusy = true
         task.spawn(function()
             local ok, err = pcall(function()
+                    if mode == "LOS" then
+                        -- No live Rush/Ambush needed: pretend a threat is approaching
+                        -- from 35 studs behind the character's facing direction.
+                        local fakeThreat = root.Position - root.CFrame.LookVector * 35
+                        rushStatus.Text = "DEBUG LOS: checking solid cover (simulated threat)..."
+                        local covered = tryLineOfSightCover("DEBUG LOS", generation, fakeThreat)
+                        if not covered then
+                            rushStatus.Text = "DEBUG LOS: no reachable verified cover"
+                        end
+                        return
+                    end
                     rushStatus.Text = "DEBUG CLOSET: searching current room first..."
                     local candidates = closetCandidates(root.Position)
                     table.sort(candidates, function(a,b)
@@ -1079,6 +1099,7 @@
         end)
     end
     debugClosetButton.MouseButton1Click:Connect(function() startDebug("CLOSET") end)
+    debugLOSButton.MouseButton1Click:Connect(function() startDebug("LOS") end)
 
     rushButton.MouseButton1Click:Connect(function()
         rushAutoEnabled = not rushAutoEnabled
