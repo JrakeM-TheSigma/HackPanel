@@ -683,7 +683,6 @@
                         end
                     end
                 end
-            end
         end
         if debugSource then
             rushStatus.Text = "DEBUG LOS: no reachable side-room door cover"
