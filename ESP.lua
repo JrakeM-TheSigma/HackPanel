@@ -745,7 +745,30 @@ end
                     and name ~= "figuresetup" and name ~= "sideroomdupe"
             end
         end
+        if not valid and getEntityName(node) and node:IsDescendantOf(workspace) then
+            -- Other floors and subfloors can spawn entities outside CurrentRooms.
+            -- Ignore known template containers and nested entity parts.
+            local ancestor = parent
+            local blocked = false
+            while ancestor and ancestor ~= workspace do
+                if ancestor.Name == "EntityInfo" or ancestor.Name == "EntityTemplates"
+                    or ancestor.Name == "EntityStorage" or getEntityName(ancestor) then
+                    blocked = true
+                    break
+                end
+                ancestor = ancestor.Parent
+            end
+            valid = not blocked and name ~= "figurecampos" and name ~= "figuresetup"
+                and name ~= "sideroomdupe"
+        end
         if valid then entityNodes[node] = true end
+    end
+    -- Also catch entities added under nested Workspace containers. The old
+    -- registry only watched direct Workspace children and known room folders,
+    -- which could silently miss spawns after room/camera transitions.
+    local function registerPotentialEntity(node)
+        if not (node:IsA("Model") or node:IsA("BasePart")) then return end
+        if getEntityName(node) then registerEntity(node) end
     end
     local function watchEntityContainer(container, handler)
         if not container or entityWatchers[container] then return end
@@ -770,6 +793,19 @@ end
     end
     watchEntityContainer(workspace, function(child)
         if child.Name == "CurrentRooms" then watchRooms(child) end
+    end)
+    -- A single event listener is cheaper than repeatedly traversing the world,
+    -- and covers nested spawns outside CurrentRooms too.
+    entityWatchers.__descendants = workspace.DescendantAdded:Connect(registerPotentialEntity)
+    -- Reconcile existing models once after startup. Entity instances may have
+    -- spawned before the panel's listeners were attached.
+    task.spawn(function()
+        local descendants = workspace:GetDescendants()
+        for i, node in ipairs(descendants) do
+            if not isCurrentRun() then return end
+            registerPotentialEntity(node)
+            if i % 250 == 0 then task.wait() end
+        end
     end)
     if workspace.CurrentCamera then watchEntityContainer(workspace.CurrentCamera) end
     entityWatchers.__camera = workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
