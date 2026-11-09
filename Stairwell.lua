@@ -1,5 +1,7 @@
     -- Keep Stairwell HUD/marker locals in their own register frame.
-    local stairCounterGui, clearStairDoorMarkers, stairCounterButton, stairEspButton = (function()
+    -- Only one register in createMenu; the stairwell implementation runs in
+    -- its own function frame rather than expanding the main menu's locals.
+    local stairControls = (function()
     local stairCounterGui = Instance.new("ScreenGui")
     stairCounterGui.Name = "HackPanelStairwellDoorCounter"
     stairCounterGui.ResetOnSpawn = false
@@ -159,8 +161,20 @@
         stairEspButton.Text = "STAIRWELL DOOR ESP: " .. (stairEspEnabled and "ON" or "OFF")
         if not stairEspEnabled then clearStairDoorMarkers() end
     end)
-        return stairCounterGui, clearStairDoorMarkers, stairCounterButton, stairEspButton
+        return {
+            gui = stairCounterGui,
+            clearMarkers = clearStairDoorMarkers,
+            counterButton = stairCounterButton,
+            espButton = stairEspButton,
+        }
     end)()
+
+    -- Isolate all remaining menu controls in a second function register frame.
+    (function()
+    local stairCounterGui = stairControls.gui
+    local clearStairDoorMarkers = stairControls.clearMarkers
+    local stairCounterButton = stairControls.counterButton
+    local stairEspButton = stairControls.espButton
 
     local function refreshStairControls()
         local isStair = activeFloorName == "THE STAIRWELL"
@@ -456,6 +470,7 @@
     showHome()
     task.spawn(fetchAllImages)
     end)()
+    end)() -- end isolated menu controls
 end
 
 createMenu()
