@@ -713,10 +713,39 @@ end
     local entityNodes, entityWatchers = {}, {}
     local function registerEntity(node)
         if not node or not node.Parent then return end
-        local n = node.Name:lower()
-        if n ~= "figurecampos" and (getEntityName(node) or n == "shade" or n == "dupe" or n == "seekmovingnewclone") then
-            entityNodes[node] = true
+        if not (node:IsA("Model") or node:IsA("BasePart")) then return end
+        local name = node.Name:lower()
+        local parent = node.Parent
+        local rooms = getCurrentRooms()
+        local camera = workspace.CurrentCamera
+        local valid = false
+        -- Match the confirmed spawn locations, not similarly named scenery.
+        if parent == workspace then
+            valid = name == "rushmoving" or name == "ambushmoving" or name == "eyes"
+        elseif parent == camera then
+            valid = name == "shade" or name == "screech"
+        elseif rooms and node:IsDescendantOf(rooms) then
+            if name == "seekmovingnewclone" then
+                valid = true
+            elseif name == "figurerig" then
+                local ancestor = parent
+                while ancestor and ancestor ~= rooms do
+                    if ancestor.Name == "FigureSetup" then valid = true break end
+                    ancestor = ancestor.Parent
+                end
+            elseif name == "dupe" then
+                local ancestor = parent
+                while ancestor and ancestor ~= rooms do
+                    if ancestor.Name == "SideroomDupe" then valid = true break end
+                    ancestor = ancestor.Parent
+                end
+            else
+                -- Preserve detection for other supported room-spawned entities.
+                valid = getEntityName(node) ~= nil and name ~= "figurecampos"
+                    and name ~= "figuresetup" and name ~= "sideroomdupe"
+            end
         end
+        if valid then entityNodes[node] = true end
     end
     local function watchEntityContainer(container, handler)
         if not container or entityWatchers[container] then return end
@@ -729,20 +758,12 @@ end
             if handler then handler(child) end
         end
     end
-    local function watchDupe(side)
-        if not side then return end
-        watchEntityContainer(side)
-    end
-    local function watchFigure(setup)
-        if not setup then return end
-        watchEntityContainer(setup)
-    end
     local function watchRoom(room)
-        if not room or not room:IsA("Model") then return end
-        watchEntityContainer(room, function(child)
-            if child.Name == "FigureSetup" then watchFigure(child)
-            elseif child.Name == "SideroomDupe" then watchDupe(child) end
-        end)
+        if not room or not room:IsA("Model") or entityWatchers[room] then return end
+        -- Room-local descendant events catch FigureRig, Dupe and Seek even
+        -- when the game nests them several folders beneath the room.
+        entityWatchers[room] = room.DescendantAdded:Connect(registerEntity)
+        for _, node in ipairs(room:GetDescendants()) do registerEntity(node) end
     end
     local function watchRooms(folder)
         watchEntityContainer(folder, watchRoom)
@@ -759,6 +780,13 @@ end
             task.wait(5)
             for node in pairs(entityNodes) do
                 if not node.Parent or not node:IsDescendantOf(workspace) then entityNodes[node] = nil end
+            end
+            -- Release listeners for rooms that have streamed out.
+            for container, connection in pairs(entityWatchers) do
+                if typeof(container) == "Instance" and not container:IsDescendantOf(workspace) then
+                    connection:Disconnect()
+                    entityWatchers[container] = nil
+                end
             end
         end
         for _, connection in pairs(entityWatchers) do connection:Disconnect() end
