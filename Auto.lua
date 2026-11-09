@@ -1,13 +1,9 @@
     -- Auto-Screech: client-side camera counter (independent of Auto-Hide).
     -- Screech's live model was previously observed under CurrentCamera.Screech.
     do
-        local enabled = false
         local binding = "HackPanelAutoScreech"
         local lastTarget = nil
         local startedAt = 0
-        local button = makeButton(hotelPages.Auto, "AUTO-SCREECH: OFF",
-            UDim2.new(0.5, -130, 0, 300), UDim2.fromOffset(260, 38))
-        button.ZIndex = 36
         local function targetPosition(instance)
             if instance:IsA("BasePart") then return instance.Position end
             if instance:IsA("Model") then
@@ -22,9 +18,8 @@
         end
         pcall(function() RunService:UnbindFromRenderStep(binding) end)
         RunService:BindToRenderStep(binding, Enum.RenderPriority.Camera.Value + 20, function()
-            if not enabled then return end
+            if not rushAutoEnabled then return end
             if not hotelPages.Auto or not hotelPages.Auto.Parent then
-                enabled = false
                 return
             end
             local camera = workspace.CurrentCamera
@@ -42,11 +37,6 @@
             local origin = camera.CFrame.Position
             if (position - origin).Magnitude < 0.1 then return end
             camera.CFrame = CFrame.lookAt(origin, position)
-        end)
-        button.MouseButton1Click:Connect(function()
-            enabled = not enabled
-            lastTarget = nil
-            button.Text = enabled and "AUTO-SCREECH: ON" or "AUTO-SCREECH: OFF"
         end)
     end
 
@@ -928,8 +918,8 @@
         rushAutoEnabled = not rushAutoEnabled
         rushGeneration += 1
         if not rushAutoEnabled then clearPathVisual() end
-        rushButton.Text = rushAutoEnabled and "ENTITY AUTO-HIDE: ON" or "ENTITY AUTO-HIDE: OFF"
-        rushStatus.Text = rushAutoEnabled and "Watching for Rush / Ambush..." or "Entity auto-hide is off"
+        rushButton.Text = rushAutoEnabled and "AUTO COUNTER: ON" or "AUTO COUNTER: OFF"
+        rushStatus.Text = rushAutoEnabled and "Countering Rush / Ambush / Screech..." or "Auto Counter is off"
     end)
 
     task.spawn(function()
