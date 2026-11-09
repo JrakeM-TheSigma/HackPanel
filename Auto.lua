@@ -543,51 +543,45 @@
                     -- Do not exit simply because Rush is far away or briefly
                     -- streams out. Require a close approach, followed by a
                     -- sustained increase in distance (Rush has passed).
-                    local safeSince, goneSince = nil, nil
+                    local goneSince = nil
                     local closestDistance = math.huge
                     local rushWasClose = false
-                    local recedingSamples = 0
-                    local previousDistance = nil
-                    local retreatStartDistance = nil
-                    local retreatStartTime = nil
+                    local retreatSince = nil
+                    local retreatBaseline = nil
+                    local lastDistance = nil
                     while rushAutoEnabled and rushGeneration == generation do
                         local distance = rushDistance()
+                        local now = os.clock()
                         if distance then
                             goneSince = nil
                             closestDistance = math.min(closestDistance, distance)
                             if distance <= RUSH_ENTER_DISTANCE then rushWasClose = true end
-                            -- Rush can drift downhill slowly; frame-to-frame
-                            -- distance changes are often smaller than 0.6 studs.
-                            -- Track sustained retreat from the closest approach.
-                            if rushWasClose and distance >= closestDistance + 7 then
-                                retreatStartDistance = retreatStartDistance or distance
-                                retreatStartTime = retreatStartTime or os.clock()
-                            elseif distance <= closestDistance + 3 then
-                                retreatStartDistance = nil
-                                retreatStartTime = nil
-                                safeSince = nil
-                            end
-                            if previousDistance and distance < previousDistance - 3 then
-                                retreatStartDistance = nil
-                                retreatStartTime = nil
-                                safeSince = nil
-                            end
-                            if rushWasClose and retreatStartTime
-                                and os.clock() - retreatStartTime >= 0.6
-                                and distance >= math.max(RUSH_ENTER_DISTANCE + 12, closestDistance + 24)
-                                and distance >= (retreatStartDistance or distance) + 12 then
-                                safeSince = safeSince or os.clock()
+                            -- Rush does not rebound. Require a close pass followed by
+                            -- sustained separation; don't wait for model destruction.
+                            if rushWasClose and distance >= closestDistance + 10 then
+                                if not retreatSince then
+                                    retreatSince = now
+                                    retreatBaseline = distance
+                                end
+                                -- A clear approach again cancels a tentative retreat.
+                                if lastDistance and distance < lastDistance - 4 then
+                                    retreatSince = nil
+                                    retreatBaseline = nil
+                                end
                             else
-                                safeSince = nil
+                                retreatSince = nil
+                                retreatBaseline = nil
                             end
-                            previousDistance = distance
+                            lastDistance = distance
                         else
-                            goneSince = goneSince or os.clock()
+                            goneSince = goneSince or now
                         end
-                        local passed = safeSince
-                            and os.clock() - safeSince >= 0.55
+                        local passed = rushWasClose and retreatSince
+                            and now - retreatSince >= 0.55
+                            and distance and distance >= closestDistance + 16
+                            and distance >= (retreatBaseline or distance) + 3
                         local vanishedAfterApproach = rushWasClose and goneSince
-                            and os.clock() - goneSince >= RUSH_MISSING_SECONDS
+                            and now - goneSince >= RUSH_MISSING_SECONDS
                         if passed or vanishedAfterApproach then
                             rushStatus.Text = "Rush passed closet - exiting..."
                             local exited = leaveCloset(candidate)
@@ -640,7 +634,8 @@
             firstDeparture = false, returned = false, retreat = false,
             lastSeen = os.clock(), awaySince = nil, towardSince = nil,
             retreatSince = nil, lastDistance = nil, planarDistance = nil,
-            nearTime = nil, safeRetreat = false}
+            nearTime = nil, safeRetreat = false, sampleDistance = nil,
+            sampleTime = nil, nearMinimum = math.huge}
         local monitoring = true
         task.spawn(function()
             while monitoring and active() do
@@ -649,7 +644,8 @@
                 if d then
                     motion.lastSeen = now
                     motion.distance = d
-                    if d <= 115 then
+                    motion.nearMinimum = math.min(motion.nearMinimum, d)
+                    if d <= 140 then
                         motion.nearSeen = true
                         motion.nearTime = now
                     end
@@ -668,9 +664,11 @@
                             motion.planarDistance = Vector3.new(offset.X, 0, offset.Z).Magnitude
                         end
                     end
-                    if motion.lastDistance then
-                        local delta = d - motion.lastDistance
-                        local direction = delta > 1 and "away" or (delta < -1 and "toward" or "stationary")
+                    if not motion.sampleTime or now - motion.sampleTime >= 0.24 then
+                        local delta = motion.sampleDistance and (d - motion.sampleDistance) or 0
+                        local direction = delta > 2.5 and "away" or (delta < -2.5 and "toward" or motion.direction)
+                        motion.sampleDistance = d
+                        motion.sampleTime = now
                         motion.direction = direction
                         if direction == "away" then
                             motion.awaySince = motion.awaySince or now
@@ -678,23 +676,21 @@
                         elseif direction == "toward" then
                             motion.towardSince = motion.towardSince or now
                             motion.awaySince = nil
-                        else
-                            motion.awaySince, motion.towardSince = nil, nil
                         end
                         -- Recognize a passed entity even if tracking began mid-pass.
                         -- Horizontal separation prevents stairs alone from looking like a retreat.
                         if motion.nearSeen and direction == "away" and d >= 115
                             and motion.planarDistance and motion.planarDistance >= 75
-                            and motion.awaySince and now - motion.awaySince >= 0.18 then
+                            and motion.awaySince and now - motion.awaySince >= 0.22 then
                             motion.firstDeparture = true
                         end
                         if motion.firstDeparture and direction == "toward" and d <= 125
-                            and motion.towardSince and now - motion.towardSince >= 0.12 then
+                            and motion.towardSince and now - motion.towardSince >= 0.22 then
                             motion.returned = true
                         end
                         if motion.returned and direction == "away" and d >= 125
                             and motion.planarDistance and motion.planarDistance >= 85
-                            and motion.awaySince and now - motion.awaySince >= 0.24 then
+                            and motion.awaySince and now - motion.awaySince >= 0.22 then
                             motion.retreat = true
                             motion.safeRetreat = true
                         end
@@ -706,6 +702,8 @@
                     motion.direction = "stationary"
                     motion.awaySince, motion.towardSince = nil, nil
                     motion.planarDistance = nil
+                    motion.sampleDistance = nil
+                    motion.sampleTime = nil
                 end
                 task.wait(0.06)
             end
@@ -799,6 +797,9 @@
                             motion.safeRetreat = false
                             motion.awaySince = nil
                             motion.towardSince = nil
+                            motion.sampleDistance = nil
+                            motion.sampleTime = nil
+                            motion.nearMinimum = math.huge
                         else
                             rushStatus.Text = "Ambush - exit unconfirmed"
                             motion.safeRetreat = false
