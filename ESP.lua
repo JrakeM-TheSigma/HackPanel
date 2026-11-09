@@ -1520,11 +1520,15 @@ end
             UDim2.new(0.5, -130, 0, 334), UDim2.fromOffset(260, 42))
         leverButton.ZIndex = 42
 
+        -- Remove previous lever overlays from earlier panel runs.
+        for _, old in ipairs(PlayerGui:GetChildren()) do
+            if old.Name == "HackPanelLeverESP" then old:Destroy() end
+        end
         local leverGui = Instance.new("ScreenGui")
         leverGui.Name = "HackPanelLeverESP"
         leverGui.IgnoreGuiInset = true
         leverGui.ResetOnSpawn = false
-        leverGui.DisplayOrder = 952
+        leverGui.DisplayOrder = entityHud.DisplayOrder
         leverGui.Parent = PlayerGui
 
         local leverTargets = {}
@@ -1566,7 +1570,13 @@ end
             highlight.OutlineTransparency = 0
             highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
             highlight.Parent = leverGui
-            local label = createEntityInfoBox(leverGui, leverColor, "LeverDistance")
+            local label = createEntityInfoBox(leverGui, leverColor, "EntityNameDistance")
+            -- Match the Dupe/other entity ESP label exactly.
+            label.Size = UDim2.fromOffset(295, 42)
+            label.Font = Enum.Font.Gotham
+            label.TextSize = 16
+            label.BackgroundTransparency = 0.13
+            label.ZIndex = 110
             local tracer = Instance.new("Frame")
             tracer.Name = "LeverTracer"
             tracer.BackgroundColor3 = leverColor
@@ -1623,7 +1633,7 @@ end
                     target.tracer.Visible = visible
                     if visible then
                         local distance = root and math.floor((root.Position - part.Position).Magnitude + 0.5) or 0
-                        target.label.Text = string.format("LEVER  |  %d studs", distance)
+                        target.label.Text = string.format("Lever | %d studs", distance)
                         target.label.Position = UDim2.fromOffset(projected.X, projected.Y + 46)
                         local to = Vector2.new(projected.X, projected.Y)
                         local diff = to - from
