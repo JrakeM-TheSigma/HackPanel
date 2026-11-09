@@ -816,9 +816,19 @@ end
     -- Entity registry: event-driven and limited to relevant containers.
     -- Shared by ESP and Warnings; no recurring full Workspace traversal.
     local entityNodes, entityWatchers = {}, {}
+    local function isActualSeek(node)
+        -- The final chase room contains many Seek hands/props whose names
+        -- can be classified as Seek. Only the moving clone is an entity.
+        return node and node:IsA("Model")
+            and node.Name:lower() == "seekmovingnewclone"
+    end
+    local function isSeekProp(node)
+        return getEntityName(node) == "Seek" and not isActualSeek(node)
+    end
     local function registerEntity(node)
         if not node or not node.Parent then return end
         if not (node:IsA("Model") or node:IsA("BasePart")) then return end
+        if isSeekProp(node) then return end
         local name = node.Name:lower()
         local parent = node.Parent
         local rooms = getCurrentRooms()
@@ -937,7 +947,8 @@ end
     local function collectWorldNodesCooperatively()
         local nodes = {}
         for node in pairs(entityNodes) do
-            if node.Parent and node.Name:lower() ~= "figurecampos" and node:IsDescendantOf(workspace) then
+            if node.Parent and node.Name:lower() ~= "figurecampos"
+                and not isSeekProp(node) and node:IsDescendantOf(workspace) then
                 nodes[#nodes+1] = node
             else
                 entityNodes[node] = nil
@@ -967,7 +978,7 @@ end
         end
         local function inspect(obj)
             local name = getEntityName(obj)
-            if not name or obj:IsDescendantOf(Players) then return end
+            if not name or isSeekProp(obj) or obj:IsDescendantOf(Players) then return end
             if obj:IsA("Model") and not obj:FindFirstChildWhichIsA("BasePart",true) then return end
             -- Ignore prefabs in common storage/template folders.
             local ancestor = obj.Parent
