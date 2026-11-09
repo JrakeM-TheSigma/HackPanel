@@ -672,6 +672,7 @@ end
     screechShaft.ZIndex = 1001
     screechShaft.Parent = screechArrow
     Instance.new("UICorner", screechShaft).CornerRadius = UDim.new(0, 2)
+    local arrowTarget, arrowGazeSince = nil, nil
     local function updateScreechArrow(camera)
         screechArrow.Visible = false
         if not entityEspEnabled or not camera then return end
@@ -688,6 +689,20 @@ end
             if not target then target = screech:FindFirstChildWhichIsA("BasePart", true) end
         end
         if not target then return end
+        if screech ~= arrowTarget then
+            arrowTarget, arrowGazeSince = screech, nil
+        end
+        if screech:GetAttribute("HackPanelScreechCountered") then return end
+        local gaze = target.Position - camera.CFrame.Position
+        if gaze.Magnitude > 0.05 and camera.CFrame.LookVector:Dot(gaze.Unit) >= 0.985 then
+            arrowGazeSince = arrowGazeSince or os.clock()
+            if os.clock() - arrowGazeSince >= 0.2 then
+                screech:SetAttribute("HackPanelScreechCountered", true)
+                return
+            end
+        else
+            arrowGazeSince = nil
+        end
         local vp = camera.ViewportSize
         local projected, onScreen = camera:WorldToViewportPoint(target.Position)
         if onScreen and projected.Z > 0
@@ -1496,7 +1511,7 @@ end
 
 
 
-    -- BACKDOOR LEVER ESP: lever assemblies are inside CurrentRooms/*/Assets.
+    -- BACKDOOR LEVER ESP: same on-screen label/tracer style as Book ESP.
     ;(function()
         local enabled = false
         local leverButton = makeButton(hotelPages.ESP, "LEVER ESP: OFF",
@@ -1504,51 +1519,97 @@ end
         leverButton.ZIndex = 42
         local markers = {}
         local color = Color3.fromRGB(0, 225, 255)
-        local function clearMarker(instance)
+        local leverGui = Instance.new("ScreenGui")
+        leverGui.Name = "HackPanelLeverESP"
+        leverGui.ResetOnSpawn = false
+        leverGui.IgnoreGuiInset = true
+        leverGui.DisplayOrder = 100005
+        leverGui.Parent = PlayerGui
+        local function removeMarker(instance)
             local marker = markers[instance]
-            if marker then
-                if marker.highlight then marker.highlight:Destroy() end
-                if marker.billboard then marker.billboard:Destroy() end
-                markers[instance] = nil
-            end
+            if not marker then return end
+            marker.highlight:Destroy()
+            marker.label:Destroy()
+            marker.tracer:Destroy()
+            markers[instance] = nil
         end
         local function addMarker(instance)
             if markers[instance] then return end
             local part = instance:IsA("BasePart") and instance
                 or instance:FindFirstChildWhichIsA("BasePart", true)
+            if not part then
+                local parent = instance.Parent
+                if parent and parent:IsA("Model") then
+                    part = parent:FindFirstChildWhichIsA("BasePart", true)
+                end
+            end
             if not part then return end
             local highlight = Instance.new("Highlight")
             highlight.Name = "HackPanelLeverHighlight"
-            highlight.Adornee = instance
+            highlight.Adornee = instance:IsA("BasePart") or instance:IsA("Model")
+                and instance or part
             highlight.FillColor = color
             highlight.OutlineColor = color
             highlight.FillTransparency = 0.82
             highlight.OutlineTransparency = 0
             highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
             highlight.Parent = instance
-            local billboard = Instance.new("BillboardGui")
-            billboard.Name = "HackPanelLeverLabel"
-            billboard.Adornee = part
-            billboard.AlwaysOnTop = true
-            billboard.Size = UDim2.fromOffset(110, 26)
-            billboard.StudsOffsetWorldSpace = Vector3.new(0, 2.3, 0)
-            billboard.Parent = PlayerGui
-            local textLabel = Instance.new("TextLabel")
-            textLabel.Size = UDim2.fromScale(1, 1)
-            textLabel.BackgroundTransparency = 1
-            textLabel.Text = "LEVER"
-            textLabel.Font = Enum.Font.GothamBold
-            textLabel.TextSize = 14
-            textLabel.TextColor3 = color
-            textLabel.TextStrokeTransparency = 0.25
-            textLabel.Parent = billboard
-            markers[instance] = {highlight = highlight, billboard = billboard}
+            local label = Instance.new("TextLabel")
+            label.Name = "LeverESPLabel"
+            label.Size = UDim2.fromOffset(165, 25)
+            label.AnchorPoint = Vector2.new(0.5, 0.5)
+            label.BackgroundTransparency = 1
+            label.Font = Enum.Font.GothamBold
+            label.TextSize = 13
+            label.TextColor3 = color
+            label.TextStrokeTransparency = 0.25
+            label.Visible = false
+            label.Parent = leverGui
+            local tracer = Instance.new("Frame")
+            tracer.Name = "LeverTracer"
+            tracer.AnchorPoint = Vector2.new(0.5, 0.5)
+            tracer.BorderSizePixel = 0
+            tracer.BackgroundColor3 = color
+            tracer.Visible = false
+            tracer.Parent = leverGui
+            markers[instance] = {part = part, highlight = highlight,
+                label = label, tracer = tracer}
         end
         leverButton.MouseButton1Click:Connect(function()
             enabled = not enabled
             leverButton.Text = enabled and "LEVER ESP: ON" or "LEVER ESP: OFF"
             if not enabled then
-                for instance in pairs(markers) do clearMarker(instance) end
+                for instance in pairs(markers) do removeMarker(instance) end
+            end
+        end)
+        local renderConnection = RunService.RenderStepped:Connect(function()
+            if not isCurrentRun() or not enabled then return end
+            local camera = workspace.CurrentCamera
+            if not camera then return end
+            local mouse = UserInputService:GetMouseLocation()
+            local from = Vector2.new(mouse.X, mouse.Y)
+            local character = LocalPlayer.Character
+            local root = character and character:FindFirstChild("HumanoidRootPart")
+            for instance, marker in pairs(markers) do
+                local part = marker.part
+                if not instance.Parent or not part.Parent then
+                    removeMarker(instance)
+                else
+                    local projected, visible = camera:WorldToViewportPoint(part.Position)
+                    visible = visible and projected.Z > 0
+                    marker.label.Visible = visible
+                    marker.tracer.Visible = visible
+                    if visible then
+                        local distance = root and math.floor((root.Position - part.Position).Magnitude + 0.5) or 0
+                        marker.label.Text = string.format("LEVER  |  %d studs", distance)
+                        marker.label.Position = UDim2.fromOffset(projected.X, projected.Y + 46)
+                        local to = Vector2.new(projected.X, projected.Y)
+                        local diff = to - from
+                        marker.tracer.Position = UDim2.fromOffset((from.X + to.X)/2, (from.Y + to.Y)/2)
+                        marker.tracer.Size = UDim2.fromOffset(diff.Magnitude, 2)
+                        marker.tracer.Rotation = math.deg(math.atan2(diff.Y, diff.X))
+                    end
+                end
             end
         end)
         task.spawn(function()
@@ -1558,23 +1619,24 @@ end
                     local found = {}
                     if rooms then
                         for _, room in ipairs(rooms:GetChildren()) do
-                            local assets = room:FindFirstChild("Assets")
-                            if assets then
-                                for _, obj in ipairs(assets:GetDescendants()) do
-                                    if obj.Name == "LeverForGate" then
-                                        found[obj] = true
-                                        addMarker(obj)
-                                    end
+                            -- Backdoor lever can be nested under SideroomXX/Assets,
+                            -- not only CurrentRooms/<number>/Assets.
+                            for _, obj in ipairs(room:GetDescendants()) do
+                                if obj.Name == "LeverForGate" then
+                                    found[obj] = true
+                                    addMarker(obj)
                                 end
                             end
                         end
                     end
                     for instance in pairs(markers) do
-                        if not found[instance] or not instance.Parent then clearMarker(instance) end
+                        if not found[instance] or not instance.Parent then removeMarker(instance) end
                     end
                 end
                 task.wait(0.45)
             end
-            for instance in pairs(markers) do clearMarker(instance) end
+            for instance in pairs(markers) do removeMarker(instance) end
+            renderConnection:Disconnect()
+            leverGui:Destroy()
         end)
     end)()
