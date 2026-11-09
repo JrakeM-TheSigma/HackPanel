@@ -587,6 +587,10 @@
                 end
             end
         end
+        if #doors == 0 then
+            rushStatus.Text = kind .. " - no side-room door in CURRENT room; LOS disabled"
+            return false
+        end
         -- Prefer a roomy side chamber over a cramped alcove close to the
         -- entity's route. Estimate usable space with a handful of raycasts;
         -- no node grid, no path search, no repeated switching between doors.
@@ -785,96 +789,10 @@
                 return false
             end
         end
-        if debugSource then
-            rushStatus.Text = "DEBUG LOS: no reachable side-room door cover"
-            return false
-        end
-        local candidates = {}
-        -- Walls and side-room doors are useful. A small, bounded sample avoids
-        -- the expensive many-node cover search from the old implementation.
-        local checked = 0
-        for _, obj in ipairs(currentRoom:GetDescendants()) do
-            if checked >= 90 then break end
-            if obj:IsA("BasePart") and obj.CanCollide and obj.Transparency < 0.9 then
-                local n = obj.Name:lower()
-                if (n:find("wall", 1, true) or n:find("door", 1, true)
-                    or n:find("pillar", 1, true) or n:find("partition", 1, true))
-                    and obj.Size.Y >= 3 and obj.Size.X + obj.Size.Z >= 5 then
-                    checked += 1
-                    local away = Vector3.new(obj.Position.X - source.X, 0, obj.Position.Z - source.Z)
-                    if away.Magnitude > 0.1 then
-                        local dir = away.Unit
-                        local side = Vector3.new(-dir.Z, 0, dir.X)
-                        local depth = math.max(3.5, math.min(9, obj.Size.Magnitude * 0.4))
-                        for _, lateral in ipairs({0, 3.5, -3.5}) do
-                            local point = Vector3.new(obj.Position.X, origin.Y, obj.Position.Z)
-                                + dir * depth + side * lateral
-                            local delta = point - origin
-                            if delta.Magnitude <= 42 and delta.Magnitude >= 2
-                                and sightBlocked(source + Vector3.new(0, 2, 0), point + Vector3.new(0, 2, 0))
-                                and not corridorBlocked(character, origin, point) then
-                                table.insert(candidates, {position = point, distance = delta.Magnitude})
-                            end
-                        end
-                    end
-                end
-            end
-        end
-        table.sort(candidates, function(a,b) return a.distance < b.distance end)
-        if #candidates == 0 then return false end
-        local binding = "HackPanelCoverMove"
-        local direction = Vector3.zero
-        local moving = true
-        pcall(function() RunService:UnbindFromRenderStep(binding) end)
-        RunService:BindToRenderStep(binding, Enum.RenderPriority.Input.Value + 2, function()
-            if moving and humanoid.Parent and humanoid.Health > 0 then
-                humanoid:Move(direction, false)
-            end
-        end)
-        local success = false
-        for i = 1, math.min(#candidates, 5) do
-            if not navigationActive(generation) then break end
-            local target = candidates[i].position
-            local started = os.clock()
-            local previous = math.huge
-            local stalledAt = os.clock()
-            while os.clock() - started < 2.3 and navigationActive(generation) do
-                local flat = Vector3.new(target.X - root.Position.X, 0, target.Z - root.Position.Z)
-                if flat.Magnitude < 2.5 then break end
-                if corridorBlocked(character, root.Position, root.Position + flat.Unit * math.min(3, flat.Magnitude)) then break end
-                direction = flat.Unit
-                if flat.Magnitude < previous - 0.15 then stalledAt = os.clock() end
-                if os.clock() - stalledAt > 0.55 then break end
-                previous = flat.Magnitude
-                task.wait(0.05)
-            end
-            direction = Vector3.zero
-            local currentSource = entityPosition()
-            if currentSource and sightBlocked(currentSource + Vector3.new(0, 2, 0), root.Position + Vector3.new(0, 2, 0)) then
-                success = true
-                break
-            end
-        end
-        moving = false
-        pcall(function() RunService:UnbindFromRenderStep(binding) end)
-        pcall(function() humanoid:Move(Vector3.zero, false) end)
-        if success then
-            rushStatus.Text = kind .. " - behind solid cover"
-            -- Keep monitoring actual LOS; entity may change position.
-            if debugSource then
-                rushStatus.Text = "DEBUG LOS: cover reached (simulated threat)"
-                return true
-            end
-            while navigationActive(generation) and entity and entity.Parent do
-                local pos = entityPosition()
-                if not pos or not sightBlocked(pos + Vector3.new(0, 2, 0), root.Position + Vector3.new(0, 2, 0)) then
-                    rushStatus.Text = kind .. " - cover exposed!"
-                    return false
-                end
-                task.wait(0.12)
-            end
-        end
-        return success
+        -- Never search arbitrary hallway "safe spots": they can be lethal.
+        -- LOS is permitted only behind a DoorNormal in the current room.
+        rushStatus.Text = kind .. " - door cover failed; no hallway fallback"
+        return false
     end
 
     local function handleRush()
@@ -1342,10 +1260,77 @@
     debugClosetButton.MouseButton1Click:Connect(function() startDebug("CLOSET") end)
     debugLOSButton.MouseButton1Click:Connect(function() startDebug("LOS") end)
 
+    -- Emergency manual override. Triple-tap W to release ALL scripted
+    -- movement immediately; leave Auto Counter OFF until explicitly enabled.
+    local userInput = game:GetService("UserInputService")
+    local guiParent = LocalPlayer:WaitForChild("PlayerGui")
+    local previous = guiParent:FindFirstChild("HackPanelMovementOverride")
+    if previous then previous:Destroy() end
+    local overrideGui = Instance.new("ScreenGui")
+    overrideGui.Name = "HackPanelMovementOverride"
+    overrideGui.ResetOnSpawn = false
+    overrideGui.IgnoreGuiInset = true
+    overrideGui.DisplayOrder = 1000
+    overrideGui.Parent = guiParent
+    local overrideText = Instance.new("TextLabel")
+    overrideText.Name = "Hint"
+    overrideText.AnchorPoint = Vector2.new(0.5, 0)
+    overrideText.Position = UDim2.new(0.5, 0, 0, 68)
+    overrideText.Size = UDim2.fromOffset(390, 38)
+    overrideText.BackgroundColor3 = Color3.fromRGB(24, 24, 30)
+    overrideText.BackgroundTransparency = 0.18
+    overrideText.TextColor3 = Color3.fromRGB(255, 225, 130)
+    overrideText.Font = Enum.Font.GothamBold
+    overrideText.TextSize = 15
+    overrideText.Text = "EMERGENCY OVERRIDE: tap W 3 times"
+    overrideText.Visible = rushAutoEnabled
+    overrideText.Parent = overrideGui
+    Instance.new("UICorner", overrideText).CornerRadius = UDim.new(0, 8)
+    local tapCount, lastTap = 0, 0
+    local overrideConnection
+    overrideConnection = userInput.InputBegan:Connect(function(input)
+        if not isCurrentRun() then
+            overrideConnection:Disconnect()
+            overrideGui:Destroy()
+            return
+        end
+        if input.KeyCode ~= Enum.KeyCode.W or userInput:GetFocusedTextBox() then return end
+        if not rushAutoEnabled and debugMode == nil then return end
+        local now = os.clock()
+        if now - lastTap > 0.55 then tapCount = 0 end
+        tapCount += 1
+        lastTap = now
+        if tapCount < 3 then return end
+        tapCount = 0
+        rushAutoEnabled = false
+        debugMode = nil
+        rushGeneration += 1
+        rushBusy = false
+        for _, binding in ipairs({
+            "HackPanelRushWalk", "HackPanelLOSDirectMove",
+            "HackPanelLOSContinuousTuck", "HackPanelCoverMove"
+        }) do
+            pcall(function() RunService:UnbindFromRenderStep(binding) end)
+        end
+        clearPathVisual()
+        local character = LocalPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if humanoid then humanoid:Move(Vector3.zero, false) end
+        local controls = getPlayerControls()
+        if controls then pcall(function() controls:move(Vector3.zero, false) end) end
+        rushButton.Text = "AUTO COUNTER: OFF"
+        rushStatus.Text = "MANUAL OVERRIDE - movement released (Auto OFF)"
+        overrideText.Text = "OVERRIDE ACTIVE - you have control"
+        overrideText.Visible = true
+    end)
+
     rushButton.MouseButton1Click:Connect(function()
         rushAutoEnabled = not rushAutoEnabled
         rushGeneration += 1
         if not rushAutoEnabled then clearPathVisual() end
+        tapCount = 0
+        overrideText.Text = "EMERGENCY OVERRIDE: tap W 3 times"
+        overrideText.Visible = rushAutoEnabled
         rushButton.Text = rushAutoEnabled and "AUTO COUNTER: ON" or "AUTO COUNTER: OFF"
         rushStatus.Text = rushAutoEnabled and "Countering Rush / Ambush / Screech..." or "Auto Counter is off"
     end)
