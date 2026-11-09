@@ -535,6 +535,128 @@
         return true
     end
 
+
+    -- Lightweight LOS fallback. No navigation mesh, node grid, or path computation.
+    -- Sample only nearby solid walls/door frames, and move directly to a verified
+    -- point on the far side. This is a fallback, not a guaranteed safe position.
+    local function tryLineOfSightCover(kind, generation)
+        local character = LocalPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        local entity = entityModel(kind)
+        if not humanoid or not root or not entity then return false end
+        local function entityPosition()
+            if not entity.Parent then return nil end
+            if entity:IsA("BasePart") then return entity.Position end
+            local ok, pivot = pcall(function() return entity:GetPivot() end)
+            return ok and pivot.Position or nil
+        end
+        local function sightBlocked(from, target)
+            local delta = target - from
+            if delta.Magnitude < 0.5 then return false end
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances = {character, entity}
+            params.IgnoreWater = true
+            local hit = workspace:Raycast(from, delta, params)
+            if not hit then return false end
+            local part = hit.Instance
+            -- Foliage and noncollidable decoration are not reliable cover.
+            local n = part.Name:lower()
+            if not part.CanCollide or part.Transparency >= 0.9
+                or n:find("plant", 1, true) or n:find("leaf", 1, true)
+                or n:find("bush", 1, true) then return false end
+            return true
+        end
+        local source = entityPosition()
+        if not source then return false end
+        local currentRoom = getCurrentRoom()
+        if not currentRoom then return false end
+        local origin = root.Position
+        local candidates = {}
+        -- Walls and side-room doors are useful. A small, bounded sample avoids
+        -- the expensive many-node cover search from the old implementation.
+        local checked = 0
+        for _, obj in ipairs(currentRoom:GetDescendants()) do
+            if checked >= 90 then break end
+            if obj:IsA("BasePart") and obj.CanCollide and obj.Transparency < 0.9 then
+                local n = obj.Name:lower()
+                if (n:find("wall", 1, true) or n:find("door", 1, true)
+                    or n:find("pillar", 1, true) or n:find("partition", 1, true))
+                    and obj.Size.Y >= 3 and obj.Size.X + obj.Size.Z >= 5 then
+                    checked += 1
+                    local away = Vector3.new(obj.Position.X - source.X, 0, obj.Position.Z - source.Z)
+                    if away.Magnitude > 0.1 then
+                        local dir = away.Unit
+                        local side = Vector3.new(-dir.Z, 0, dir.X)
+                        local depth = math.max(3.5, math.min(9, obj.Size.Magnitude * 0.4))
+                        for _, lateral in ipairs({0, 3.5, -3.5}) do
+                            local point = Vector3.new(obj.Position.X, origin.Y, obj.Position.Z)
+                                + dir * depth + side * lateral
+                            local delta = point - origin
+                            if delta.Magnitude <= 42 and delta.Magnitude >= 2
+                                and sightBlocked(source + Vector3.new(0, 2, 0), point + Vector3.new(0, 2, 0))
+                                and not corridorBlocked(character, origin, point) then
+                                table.insert(candidates, {position = point, distance = delta.Magnitude})
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        table.sort(candidates, function(a,b) return a.distance < b.distance end)
+        if #candidates == 0 then return false end
+        local binding = "HackPanelCoverMove"
+        local direction = Vector3.zero
+        local moving = true
+        pcall(function() RunService:UnbindFromRenderStep(binding) end)
+        RunService:BindToRenderStep(binding, Enum.RenderPriority.Input.Value + 2, function()
+            if moving and humanoid.Parent and humanoid.Health > 0 then
+                humanoid:Move(direction, false)
+            end
+        end)
+        local success = false
+        for i = 1, math.min(#candidates, 5) do
+            if not navigationActive(generation) then break end
+            local target = candidates[i].position
+            local started = os.clock()
+            local previous = math.huge
+            local stalledAt = os.clock()
+            while os.clock() - started < 2.3 and navigationActive(generation) do
+                local flat = Vector3.new(target.X - root.Position.X, 0, target.Z - root.Position.Z)
+                if flat.Magnitude < 2.5 then break end
+                if corridorBlocked(character, root.Position, root.Position + flat.Unit * math.min(3, flat.Magnitude)) then break end
+                direction = flat.Unit
+                if flat.Magnitude < previous - 0.15 then stalledAt = os.clock() end
+                if os.clock() - stalledAt > 0.55 then break end
+                previous = flat.Magnitude
+                task.wait(0.05)
+            end
+            direction = Vector3.zero
+            local currentSource = entityPosition()
+            if currentSource and sightBlocked(currentSource + Vector3.new(0, 2, 0), root.Position + Vector3.new(0, 2, 0)) then
+                success = true
+                break
+            end
+        end
+        moving = false
+        pcall(function() RunService:UnbindFromRenderStep(binding) end)
+        pcall(function() humanoid:Move(Vector3.zero, false) end)
+        if success then
+            rushStatus.Text = kind .. " - behind solid cover"
+            -- Keep monitoring actual LOS; entity may change position.
+            while navigationActive(generation) and entity.Parent do
+                local pos = entityPosition()
+                if not pos or not sightBlocked(pos + Vector3.new(0, 2, 0), root.Position + Vector3.new(0, 2, 0)) then
+                    rushStatus.Text = kind .. " - cover exposed!"
+                    return false
+                end
+                task.wait(0.12)
+            end
+        end
+        return success
+    end
+
     local function handleRush()
         if rushBusy then return end
         rushBusy = true
@@ -543,6 +665,10 @@
         local root = character and character:FindFirstChild("HumanoidRootPart")
         if not root then rushBusy = false; return end
         local allCandidates = closetCandidates(root.Position)
+        if #allCandidates == 0 or allCandidates[1].distance > 55 then
+            rushStatus.Text = "Rush - checking nearby solid cover..."
+            if tryLineOfSightCover("Rush", generation) then rushBusy = false; return end
+        end
         local currentRoom = getCurrentRoom()
         local currentCandidates, adjacentCandidates = {}, {}
         for _, candidate in ipairs(allCandidates) do
@@ -686,7 +812,10 @@
             end
         end
         if not completed and rushAutoEnabled and rushGeneration == generation then
-            rushStatus.Text = "No reachable hiding spot in accessible rooms"
+            rushStatus.Text = "Rush - closet unreachable; checking solid cover..."
+            if not tryLineOfSightCover("Rush", generation) then
+                rushStatus.Text = "Rush - no verified reachable cover"
+            end
         end
         rushBusy = false
     end
@@ -785,6 +914,10 @@
             local root = character and character:FindFirstChild("HumanoidRootPart")
             if not root then return end
             local candidates = closetCandidates(root.Position)
+            if #candidates == 0 or candidates[1].distance > 55 then
+                rushStatus.Text = "Ambush - checking nearby solid cover..."
+                if tryLineOfSightCover("Ambush", generation) then return end
+            end
             local currentRoom = getCurrentRoom()
             table.sort(candidates, function(a,b)
                 if a.currentRoom ~= b.currentRoom then return a.currentRoom end
@@ -802,7 +935,10 @@
                 end
             end
             if not chosen then
-                rushStatus.Text = "Ambush - no reachable hiding spot: " .. failure
+                rushStatus.Text = "Ambush - checking cover after closet failure..."
+                if not tryLineOfSightCover("Ambush", generation) then
+                    rushStatus.Text = "Ambush - no verified cover: " .. failure
+                end
                 return
             end
             local hidden = isActuallyHiding()
