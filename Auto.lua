@@ -1054,6 +1054,7 @@
         local motion = {distance = nil, direction = "stationary", nearSeen = false,
             firstDeparture = false, returned = false, retreat = false,
             lastSeen = os.clock(), awaySince = nil, towardSince = nil,
+            awaySamples = 0, towardSamples = 0,
             retreatSince = nil, lastDistance = nil, planarDistance = nil,
             nearTime = nil, safeRetreat = false, sampleDistance = nil,
             sampleTime = nil, nearMinimum = math.huge}
@@ -1087,31 +1088,36 @@
                     end
                     if not motion.sampleTime or now - motion.sampleTime >= 0.24 then
                         local delta = motion.sampleDistance and (d - motion.sampleDistance) or 0
-                        local direction = delta > 2.5 and "away" or (delta < -2.5 and "toward" or motion.direction)
+                        local direction = delta > 3.5 and "away" or (delta < -3.5 and "toward" or "stationary")
                         motion.sampleDistance = d
                         motion.sampleTime = now
                         motion.direction = direction
                         if direction == "away" then
                             motion.awaySince = motion.awaySince or now
-                            motion.towardSince = nil
+                            motion.awaySamples = motion.awaySamples + 1
+                            motion.towardSince, motion.towardSamples = nil, 0
                         elseif direction == "toward" then
                             motion.towardSince = motion.towardSince or now
-                            motion.awaySince = nil
+                            motion.towardSamples = motion.towardSamples + 1
+                            motion.awaySince, motion.awaySamples = nil, 0
+                        else
+                            motion.awaySince, motion.towardSince = nil, nil
+                            motion.awaySamples, motion.towardSamples = 0, 0
                         end
                         -- Recognize a passed entity even if tracking began mid-pass.
                         -- Horizontal separation prevents stairs alone from looking like a retreat.
                         if motion.nearSeen and direction == "away" and d >= 115
                             and motion.planarDistance and motion.planarDistance >= 75
-                            and motion.awaySince and now - motion.awaySince >= 0.22 then
+                            and motion.awaySamples >= 3 and motion.awaySince and now - motion.awaySince >= 0.6 then
                             motion.firstDeparture = true
                         end
                         if motion.firstDeparture and direction == "toward" and d <= 125
-                            and motion.towardSince and now - motion.towardSince >= 0.22 then
+                            and motion.towardSamples >= 2 and motion.towardSince and now - motion.towardSince >= 0.3 then
                             motion.returned = true
                         end
-                        if motion.returned and direction == "away" and d >= 125
-                            and motion.planarDistance and motion.planarDistance >= 85
-                            and motion.awaySince and now - motion.awaySince >= 0.22 then
+                        if motion.returned and direction == "away" and d >= 165
+                            and motion.planarDistance and motion.planarDistance >= 110
+                            and motion.awaySamples >= 3 and motion.awaySince and now - motion.awaySince >= 0.6 then
                             motion.retreat = true
                             motion.safeRetreat = true
                         end
@@ -1122,6 +1128,7 @@
                     motion.lastDistance = nil
                     motion.direction = "stationary"
                     motion.awaySince, motion.towardSince = nil, nil
+                    motion.awaySamples, motion.towardSamples = 0, 0
                     motion.planarDistance = nil
                     motion.sampleDistance = nil
                     motion.sampleTime = nil
@@ -1196,7 +1203,8 @@
                         rushStatus.Text = "Ambush - returning to hiding spot..."
                     -- Go to safety immediately, but enter only on approach or emergency proximity.
                     elseif distance and (distance <= 65 or
-                        (distance <= 220 and motion.direction == "toward"))
+                        (distance <= 180 and motion.direction == "toward"
+                            and motion.towardSamples >= 2))
                         and now - lastHideAttempt >= 0.7 then
                         lastHideAttempt = now
                         rushStatus.Text = "Ambush approaching - entering hiding spot"
@@ -1225,6 +1233,8 @@
                             motion.safeRetreat = false
                             motion.awaySince = nil
                             motion.towardSince = nil
+                            motion.awaySamples = 0
+                            motion.towardSamples = 0
                             motion.sampleDistance = nil
                             motion.sampleTime = nil
                             motion.nearMinimum = math.huge
