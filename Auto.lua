@@ -574,6 +574,61 @@
         local currentRoom = getCurrentRoom()
         if not currentRoom then return false end
         local origin = root.Position
+        -- Fast side-room doorway fallback: try only nearby side-room doors.
+        -- No node grid or broad geometry scan. Verify LOS after moving.
+        local sideDoors = {}
+        for _, obj in ipairs(currentRoom:GetDescendants()) do
+            if obj:IsA("BasePart") and obj.Name:lower():find("door", 1, true) then
+                local ancestor = obj.Parent
+                local inSideRoom = false
+                while ancestor and ancestor ~= currentRoom do
+                    if ancestor.Name:lower():find("sideroom", 1, true) then
+                        inSideRoom = true
+                        break
+                    end
+                    ancestor = ancestor.Parent
+                end
+                if inSideRoom and (obj.Position - origin).Magnitude <= 36 then
+                    table.insert(sideDoors, obj)
+                end
+            end
+        end
+        table.sort(sideDoors, function(x, y)
+            return (x.Position - origin).Magnitude < (y.Position - origin).Magnitude
+        end)
+        for i = 1, math.min(4, #sideDoors) do
+            if not navigationActive(generation) then return false end
+            local door = sideDoors[i]
+            local horizontal = Vector3.new(door.Position.X - source.X, 0, door.Position.Z - source.Z)
+            if horizontal.Magnitude > 0.5 then
+                local direction = horizontal.Unit
+                -- Step just past the doorway, toward the side-room interior.
+                for _, offset in ipairs({5, 8}) do
+                    local target = Vector3.new(door.Position.X, origin.Y, door.Position.Z) + direction * offset
+                    if (target - root.Position).Magnitude <= 38
+                        and sightBlocked(source + Vector3.new(0, 2, 0), target + Vector3.new(0, 2, 0)) then
+                        rushStatus.Text = kind .. " - moving behind side-room door..."
+                        humanoid:MoveTo(target)
+                        local start = os.clock()
+                        while navigationActive(generation) and os.clock() - start < 1.7 do
+                            if (Vector3.new(root.Position.X, 0, root.Position.Z)
+                                - Vector3.new(target.X, 0, target.Z)).Magnitude <= 3 then break end
+                            task.wait(0.05)
+                        end
+                        humanoid:Move(Vector3.zero, false)
+                        local liveSource = entityPosition()
+                        if liveSource and sightBlocked(liveSource + Vector3.new(0, 2, 0), root.Position + Vector3.new(0, 2, 0)) then
+                            rushStatus.Text = kind .. " - behind side-room door"
+                            return true
+                        end
+                    end
+                end
+            end
+        end
+        if debugSource then
+            rushStatus.Text = "DEBUG LOS: no reachable side-room door cover"
+            return false
+        end
         local candidates = {}
         -- Walls and side-room doors are useful. A small, bounded sample avoids
         -- the expensive many-node cover search from the old implementation.
