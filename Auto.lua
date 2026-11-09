@@ -630,7 +630,8 @@
         local motion = {distance = nil, direction = "stationary", nearSeen = false,
             firstDeparture = false, returned = false, retreat = false,
             lastSeen = os.clock(), awaySince = nil, towardSince = nil,
-            retreatSince = nil, lastDistance = nil}
+            retreatSince = nil, lastDistance = nil, planarDistance = nil,
+            nearTime = nil, safeRetreat = false}
         local monitoring = true
         task.spawn(function()
             while monitoring and active() do
@@ -639,7 +640,25 @@
                 if d then
                     motion.lastSeen = now
                     motion.distance = d
-                    if d <= 85 then motion.nearSeen = true end
+                    if d <= 115 then
+                        motion.nearSeen = true
+                        motion.nearTime = now
+                    end
+                    local entity = entityModel("Ambush")
+                    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                    if entity and root then
+                        local position
+                        if entity:IsA("BasePart") then
+                            position = entity.Position
+                        else
+                            local pivotOK, pivot = pcall(function() return entity:GetPivot() end)
+                            if pivotOK then position = pivot.Position end
+                        end
+                        if position then
+                            local offset = position - root.Position
+                            motion.planarDistance = Vector3.new(offset.X, 0, offset.Z).Magnitude
+                        end
+                    end
                     if motion.lastDistance then
                         local delta = d - motion.lastDistance
                         local direction = delta > 1 and "away" or (delta < -1 and "toward" or "stationary")
@@ -653,17 +672,23 @@
                         else
                             motion.awaySince, motion.towardSince = nil, nil
                         end
-                        if motion.nearSeen and direction == "away" and d >= 110
-                            and motion.awaySince and now - motion.awaySince >= 0.18 then
+                        -- Recognize a passed entity even if tracking began mid-pass.
+                        -- Horizontal separation prevents stairs alone from looking like a retreat.
+                        if motion.nearSeen and direction == "away" and d >= 140
+                            and motion.planarDistance and motion.planarDistance >= 100
+                            and motion.awaySince and now - motion.awaySince >= 0.24 then
                             motion.firstDeparture = true
+                            motion.safeRetreat = true
                         end
                         if motion.firstDeparture and direction == "toward" and d <= 100
                             and motion.towardSince and now - motion.towardSince >= 0.12 then
                             motion.returned = true
                         end
-                        if motion.returned and direction == "away" and d >= 130
+                        if motion.returned and direction == "away" and d >= 145
+                            and motion.planarDistance and motion.planarDistance >= 105
                             and motion.awaySince and now - motion.awaySince >= 0.3 then
                             motion.retreat = true
+                            motion.safeRetreat = true
                         end
                     end
                     motion.lastDistance = d
@@ -672,6 +697,7 @@
                     motion.lastDistance = nil
                     motion.direction = "stationary"
                     motion.awaySince, motion.towardSince = nil, nil
+                    motion.planarDistance = nil
                 end
                 task.wait(0.06)
             end
@@ -729,8 +755,9 @@
                         rushStatus.Text = "Ambush - ready at hiding spot"
                     end
                 else
-                    -- A complete observed return is needed before resetting Hide.
-                    if motion.retreat and now - lastExitAttempt >= 1 then
+                    -- Reset Hide after a confirmed safe outward pass, not only when
+                    -- Ambush despawns. Remain ready for another unexpected rebound.
+                    if motion.safeRetreat and now - lastExitAttempt >= 1 then
                         lastExitAttempt = now
                         rushStatus.Text = "Ambush return retreated - resetting Hide"
                         if leaveCloset(chosen) then
@@ -739,8 +766,12 @@
                             motion.firstDeparture = false
                             motion.returned = false
                             motion.retreat = false
+                            motion.safeRetreat = false
+                            motion.awaySince = nil
+                            motion.towardSince = nil
                         else
                             rushStatus.Text = "Ambush - exit unconfirmed"
+                            motion.safeRetreat = false
                         end
                     else
                         local phase = not motion.firstDeparture and "await_first_departure"
