@@ -4,16 +4,25 @@
         return (rushAutoEnabled or debugMode ~= nil) and rushGeneration == generation
     end
 
-    local function rushModel()
-        -- Rush typically spawns in workspace, but variants can be named RushMoving.
+    local function entityModel(kind)
+        local names = kind == "Ambush"
+            and {ambushmoving = true, ambush = true}
+            or {rushmoving = true, rush = true, rushnew = true}
         for _, child in ipairs(workspace:GetChildren()) do
-            local n = child.Name:lower()
-            if (n == "rushmoving" or n == "rush" or n == "rushnew")
+            if names[child.Name:lower()]
                 and (child:IsA("Model") or child:IsA("BasePart")) then
                 return child
             end
         end
         return nil
+    end
+
+    local function rushModel()
+        return entityModel("Rush")
+    end
+
+    local function ambushModel()
+        return entityModel("Ambush")
     end
 
     local function closetCandidates(origin)
@@ -321,24 +330,28 @@
     local rushHiddenByAutomation = false
     local rushHidingCandidate = nil
 
-    local function rushDistance()
-        local rush = rushModel()
-        if not rush then return nil end
+    local function entityDistance(kind)
+        local entity = entityModel(kind)
+        if not entity then return nil end
         local character = LocalPlayer.Character
         local root = character and character:FindFirstChild("HumanoidRootPart")
         if not root then return nil end
         local position
-        if rush:IsA("BasePart") then
-            position = rush.Position
-        elseif rush:IsA("Model") then
-            local ok, pivot = pcall(function() return rush:GetPivot() end)
+        if entity:IsA("BasePart") then
+            position = entity.Position
+        else
+            local ok, pivot = pcall(function() return entity:GetPivot() end)
             if ok then position = pivot.Position end
         end
         return position and (position - root.Position).Magnitude or nil
     end
 
+    local function rushDistance()
+        return entityDistance("Rush")
+    end
+
     local function leaveCloset(candidate)
-        rushStatus.Text = "Rush passed - exiting closet..."
+        rushStatus.Text = "Entity passed - exiting closet..."
         local character = LocalPlayer.Character
         local humanoid = character and character:FindFirstChildOfClass("Humanoid")
         local root = character and character:FindFirstChild("HumanoidRootPart")
@@ -388,9 +401,9 @@
         if controls then pcall(function() controls:move(Vector3.zero, true) end) end
         pcall(function() humanoid:Move(Vector3.zero, false) end)
         if exited then
-            rushStatus.Text = "Rush passed - exited closet"
+            rushStatus.Text = "Exited closet"
         else
-            rushStatus.Text = "Rush passed - exit unconfirmed; press W manually"
+            rushStatus.Text = "Exit unconfirmed; press W manually"
         end
         return exited
     end
@@ -569,6 +582,128 @@
         rushBusy = false
     end
 
+    -- Ambush uses the same proven navigation/closet input as Rush.
+    -- Each rebound: wait for approach, let it pass forward AND return,
+    -- then briefly exit only after the return pass is moving away.
+    local function handleAmbush()
+        if rushBusy then return end
+        rushBusy = true
+        local generation = rushGeneration
+        local function active()
+            return rushAutoEnabled and rushGeneration == generation
+        end
+        local ok, err = pcall(function()
+            local character = LocalPlayer.Character
+            local root = character and character:FindFirstChild("HumanoidRootPart")
+            if not root then return end
+            local candidates = closetCandidates(root.Position)
+            local currentRoom = getCurrentRoom()
+            table.sort(candidates, function(a, b)
+                if a.currentRoom ~= b.currentRoom then return a.currentRoom end
+                return a.distance < b.distance
+            end)
+            local chosen
+            for i, candidate in ipairs(candidates) do
+                if not active() then return end
+                if candidate.currentRoom or adjacentRoomPassable(currentRoom, candidate.room) then
+                    rushStatus.Text = "Ambush - reaching closet " .. i .. "/" .. #candidates
+                    local reached = walkToCloset(candidate, generation)
+                    if reached then chosen = candidate; break end
+                end
+            end
+            if not chosen then
+                rushStatus.Text = "Ambush - no reachable closet"
+                return
+            end
+            local hidden = false
+            local missingSince = nil
+            local returnPasses = 0
+            local previousDistance = nil
+            local movingAway = 0
+            local movingToward = 0
+            local farSince = nil
+            local exitStarted = false
+            local sawFirstDeparture = false
+            -- Ambush is fast: enter as soon as it comes within 180 studs.
+            while active() do
+                local distance = entityDistance("Ambush")
+                if not distance then
+                    missingSince = missingSince or os.clock()
+                    if os.clock() - missingSince >= 1.5 then
+                        if hidden then
+                            rushStatus.Text = "Ambush gone - leaving closet"
+                            leaveCloset(chosen)
+                        end
+                        rushStatus.Text = "Ambush gone - watching for entities"
+                        return
+                    end
+                else
+                    missingSince = nil
+                    if previousDistance then
+                        if distance > previousDistance + 1 then
+                            movingAway += 1
+                            movingToward = 0
+                        elseif distance < previousDistance - 1 then
+                            movingToward += 1
+                            movingAway = 0
+                        end
+                    end
+                    if not hidden and distance <= 180 then
+                        rushStatus.Text = "Ambush approaching - hiding early"
+                        local success, reason = tryHide(chosen, generation)
+                        if success then
+                            hidden = true
+                            returnPasses = 0
+                            exitStarted = false
+                            sawFirstDeparture = false
+                            farSince = nil
+                        else
+                            rushStatus.Text = "Ambush - hide failed: " .. tostring(reason)
+                        end
+                    elseif hidden then
+                        -- Only count the return trip after Ambush has first
+                        -- traveled away and then approached the closet again.
+                        if movingAway >= 3 and distance >= 90 then
+                            sawFirstDeparture = true
+                        end
+                        if sawFirstDeparture and movingToward >= 2 and distance < 110 then
+                            exitStarted = true
+                        end
+                        if exitStarted and movingAway >= 3 and distance >= 95 then
+                            farSince = farSince or os.clock()
+                            if os.clock() - farSince >= 0.25 then
+                                returnPasses += 1
+                                rushStatus.Text = "Ambush return passed - resetting Hide"
+                                local exited = leaveCloset(chosen)
+                                if exited then
+                                    hidden = false
+                                    -- Re-enter on the next approach, or immediately
+                                    -- if Ambush turns back sooner than expected.
+                                    previousDistance = nil
+                                    movingToward, movingAway = 0, 0
+                                    farSince = nil
+                                else
+                                    rushStatus.Text = "Ambush - closet exit unconfirmed"
+                                end
+                                exitStarted = false
+                                sawFirstDeparture = false
+                            end
+                        else
+                            farSince = nil
+                            rushStatus.Text = "Ambush - hidden, watching rebound " .. tostring(returnPasses + 1)
+                        end
+                    else
+                        rushStatus.Text = "Ambush - ready at closet"
+                    end
+                    previousDistance = distance
+                end
+                task.wait(0.06)
+            end
+        end)
+        if not ok then rushStatus.Text = "Ambush error: " .. tostring(err):sub(1, 90) end
+        rushBusy = false
+    end
+
     -- Closet navigation test; no fake Rush is spawned.
     local debugClosetButton = makeButton(hotelPages.Auto, "DEBUG: CLOSETS",
         UDim2.new(0.5, -266, 0, 292), UDim2.fromOffset(258, 38))
@@ -579,8 +714,8 @@
             rushStatus.Text = "Navigation already running - wait for completion"
             return
         end
-        if rushModel() then
-            rushStatus.Text = "Real Rush present - debug disabled for safety"
+        if rushModel() or ambushModel() then
+            rushStatus.Text = "Entity present - debug disabled for safety"
             return
         end
         local character = LocalPlayer.Character
@@ -626,19 +761,27 @@
         rushAutoEnabled = not rushAutoEnabled
         rushGeneration += 1
         if not rushAutoEnabled then clearPathVisual() end
-        rushButton.Text = rushAutoEnabled and "RUSH AUTO-HIDE: ON" or "RUSH AUTO-HIDE: OFF"
-        rushStatus.Text = rushAutoEnabled and "Watching for Rush..." or "Rush auto-hide is off"
+        rushButton.Text = rushAutoEnabled and "ENTITY AUTO-HIDE: ON" or "ENTITY AUTO-HIDE: OFF"
+        rushStatus.Text = rushAutoEnabled and "Watching for Rush / Ambush..." or "Entity auto-hide is off"
     end)
 
     task.spawn(function()
         local lastRush = nil
+        local lastAmbush = nil
         local rushGoneAt = nil
         while menuGui and menuGui.Parent do
             local currentRush = rushModel()
+            local currentAmbush = ambushModel()
+            if currentAmbush and rushAutoEnabled and currentAmbush ~= lastAmbush then
+                lastAmbush = currentAmbush
+                if not rushBusy then task.spawn(handleAmbush) end
+            elseif not currentAmbush then
+                lastAmbush = nil
+            end
             if currentRush then
                 rushGoneAt = nil
                 -- Rush warnings are controlled by the Warnings tab checklist.
-                if rushAutoEnabled and currentRush ~= lastRush then
+                if rushAutoEnabled and currentRush ~= lastRush and not currentAmbush then
                     lastRush = currentRush
                     task.spawn(handleRush)
                 end
@@ -651,9 +794,9 @@
                         refreshEntities()
                         if rushAutoEnabled then
                             -- Rush handler manages disappearance and exiting the closet itself
-                            if not isActuallyHiding() then rushStatus.Text = "Watching for Rush..." end
+                            if not isActuallyHiding() and not currentAmbush then rushStatus.Text = "Watching for Rush / Ambush..." end
                         else
-                            rushStatus.Text = "Rush auto-hide is off"
+                            rushStatus.Text = "Entity auto-hide is off"
                         end
                     end
                 end
