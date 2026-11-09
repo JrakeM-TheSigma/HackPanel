@@ -1,3 +1,55 @@
+    -- Auto-Screech: client-side camera counter (independent of Auto-Hide).
+    -- Screech's live model was previously observed under CurrentCamera.Screech.
+    do
+        local enabled = false
+        local binding = "HackPanelAutoScreech"
+        local lastTarget = nil
+        local startedAt = 0
+        local button = makeButton(hotelPages.Auto, "AUTO-SCREECH: OFF",
+            UDim2.new(0.5, -130, 0, 300), UDim2.fromOffset(260, 38))
+        button.ZIndex = 36
+        local function targetPosition(instance)
+            if instance:IsA("BasePart") then return instance.Position end
+            if instance:IsA("Model") then
+                local head = instance:FindFirstChild("Head", true)
+                    or instance:FindFirstChild("Face", true)
+                    or instance:FindFirstChild("Main", true)
+                if head and head:IsA("BasePart") then return head.Position end
+                local part = instance.PrimaryPart or instance:FindFirstChildWhichIsA("BasePart", true)
+                if part then return part.Position end
+            end
+            return nil
+        end
+        pcall(function() RunService:UnbindFromRenderStep(binding) end)
+        RunService:BindToRenderStep(binding, Enum.RenderPriority.Camera.Value + 20, function()
+            if not enabled then return end
+            if not hotelPages.Auto or not hotelPages.Auto.Parent then
+                enabled = false
+                return
+            end
+            local camera = workspace.CurrentCamera
+            if not camera or camera.CameraType == Enum.CameraType.Scriptable then return end
+            local screech = camera:FindFirstChild("Screech")
+            if not screech then lastTarget = nil; return end
+            local position = targetPosition(screech)
+            if not position then return end
+            if screech ~= lastTarget then
+                lastTarget = screech
+                startedAt = os.clock()
+            end
+            -- Short burst only: do not lock the camera if the model lingers.
+            if os.clock() - startedAt > 1.1 then return end
+            local origin = camera.CFrame.Position
+            if (position - origin).Magnitude < 0.1 then return end
+            camera.CFrame = CFrame.lookAt(origin, position)
+        end)
+        button.MouseButton1Click:Connect(function()
+            enabled = not enabled
+            lastTarget = nil
+            button.Text = enabled and "AUTO-SCREECH: ON" or "AUTO-SCREECH: OFF"
+        end)
+    end
+
     -- Manual navigation diagnostics. These do not spawn a real Rush.
     local debugMode = nil
     local function navigationActive(generation)
