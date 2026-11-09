@@ -733,7 +733,6 @@
                     return false
                 end
                 rushStatus.Text = kind .. " - stepping back behind door..."
-                local tuckDirection = flat(target - root.Position)
                 moveQuick(target, 2.2)
                 if not navigationActive(generation) then return false end
                 local remaining = flat(target - root.Position).Magnitude
@@ -741,29 +740,72 @@
                     rushStatus.Text = kind .. " - could not reach behind door"
                     return false
                 end
-                -- Keep walking in the SAME tuck direction for up to five
-                -- seconds. Physical collision holds us against the wall;
-                -- never choose a different door or reverse direction.
-                if tuckDirection.Magnitude > 0.1 then
-                    local holdDirection = tuckDirection.Unit
-                    local holdBinding = "HackPanelLOSWallHold"
-                    local controls = getPlayerControls()
-                    pcall(function() RunService:UnbindFromRenderStep(holdBinding) end)
-                    rushStatus.Text = kind .. " - pressing against wall (5s)..."
-                    RunService:BindToRenderStep(holdBinding, Enum.RenderPriority.Input.Value + 4, function()
-                        if navigationActive(generation) and humanoid.Parent then
-                            if controls then pcall(function() controls:move(holdDirection, false) end) end
-                            humanoid:Move(holdDirection, false)
+                -- Press toward a REAL nearby solid wall, not along the
+                -- diagonal from our character to the tuck destination.
+                -- Check only the door-side directions, never cross the room.
+                local wallParams = RaycastParams.new()
+                wallParams.FilterType = Enum.RaycastFilterType.Exclude
+                wallParams.FilterDescendantsInstances = {character, door.object}
+                wallParams.IgnoreWater = true
+                local wallOrigin = root.Position + Vector3.new(0, 2, 0)
+                local wallDirection = nil
+                local wallDistance = math.huge
+                local preferredSide = right
+                for _, direction in ipairs({preferredSide, -preferredSide}) do
+                    local probe = wallOrigin
+                    local traveled = 0
+                    for _ = 1, 5 do
+                        local hit = workspace:Raycast(probe, direction * (7 - traveled), wallParams)
+                        if not hit then break end
+                        local distance = (hit.Position - wallOrigin).Magnitude
+                        local name = hit.Instance.Name:lower()
+                        if hit.Instance.CanCollide and hit.Instance.Transparency < 0.9
+                            and not name:find("plant", 1, true)
+                            and not name:find("pot", 1, true)
+                            and not name:find("leaf", 1, true)
+                            and not name:find("bush", 1, true) then
+                            -- Prefer the door's local-right wall, but do not
+                            -- commit to an unrelated distant obstacle.
+                            local score = distance + (direction:Dot(preferredSide) < 0 and 2.5 or 0)
+                            if score < wallDistance then
+                                wallDistance = score
+                                wallDirection = direction
+                            end
+                            break
                         end
-                    end)
-                    local holdStart = os.clock()
-                    while navigationActive(generation) and os.clock() - holdStart < 5 do
-                        task.wait(0.05)
+                        traveled = distance + 0.15
+                        if traveled >= 7 then break end
+                        probe = hit.Position + direction * 0.15
                     end
-                    pcall(function() RunService:UnbindFromRenderStep(holdBinding) end)
-                    if controls then pcall(function() controls:move(Vector3.zero, false) end) end
-                    humanoid:Move(Vector3.zero, false)
-                    if not navigationActive(generation) then return false end
+                end
+                if not wallDirection then
+                    rushStatus.Text = kind .. " - no nearby solid wall; stopping"
+                    return false
+                end
+                local holdBinding = "HackPanelLOSWallHold"
+                local controls = getPlayerControls()
+                pcall(function() RunService:UnbindFromRenderStep(holdBinding) end)
+                rushStatus.Text = kind .. " - pressing toward wall (5s)..."
+                RunService:BindToRenderStep(holdBinding, Enum.RenderPriority.Input.Value + 4, function()
+                    if navigationActive(generation) and humanoid.Parent then
+                        if controls then pcall(function() controls:move(wallDirection, false) end) end
+                        humanoid:Move(wallDirection, false)
+                    end
+                end)
+                local holdStart = os.clock()
+                while navigationActive(generation) and os.clock() - holdStart < 5 do
+                    task.wait(0.05)
+                end
+                pcall(function() RunService:UnbindFromRenderStep(holdBinding) end)
+                if controls then pcall(function() controls:move(Vector3.zero, false) end) end
+                humanoid:Move(Vector3.zero, false)
+                if not navigationActive(generation) then return false end
+                -- Do not report cover success unless we are actually near
+                -- the chosen wall, as well as out of the threat's sight.
+                local contactHit = workspace:Raycast(root.Position + Vector3.new(0, 2, 0), wallDirection * 3.5, wallParams)
+                if not contactHit or not contactHit.Instance.CanCollide then
+                    rushStatus.Text = kind .. " - wall not reached"
+                    return false
                 end
                 local threat = entityPosition()
                 if threat and sightBlocked(threat + Vector3.new(0, 2, 0), root.Position + Vector3.new(0, 2, 0)) then
