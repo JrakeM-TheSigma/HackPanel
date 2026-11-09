@@ -678,9 +678,8 @@
                             and motion.planarDistance and motion.planarDistance >= 100
                             and motion.awaySince and now - motion.awaySince >= 0.24 then
                             motion.firstDeparture = true
-                            motion.safeRetreat = true
                         end
-                        if motion.firstDeparture and direction == "toward" and d <= 100
+                        if motion.firstDeparture and direction == "toward" and d <= 85
                             and motion.towardSince and now - motion.towardSince >= 0.12 then
                             motion.returned = true
                         end
@@ -778,7 +777,8 @@
                 else
                     -- Reset Hide after a confirmed safe outward pass, not only when
                     -- Ambush despawns. Remain ready for another unexpected rebound.
-                    if motion.safeRetreat and now - lastExitAttempt >= 1 then
+                    if motion.returned and motion.retreat and motion.safeRetreat
+                        and now - lastExitAttempt >= 1 then
                         lastExitAttempt = now
                         rushStatus.Text = "Ambush return retreated - resetting Hide"
                         if leaveCloset(chosen) then
