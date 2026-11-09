@@ -169,8 +169,9 @@
         }
     end)()
 
-    -- Isolate all remaining menu controls in a second function register frame.
-    (function()
+    -- A leading semicolon separates this IIFE from the preceding call.
+    -- Without it, Luau treats the opening parenthesis as another argument.
+    ;(function()
     local stairCounterGui = stairControls.gui
     local clearStairDoorMarkers = stairControls.clearMarkers
     local stairCounterButton = stairControls.counterButton
