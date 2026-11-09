@@ -625,11 +625,97 @@ end
         rushMotion[obj] = nil
         entityHudItems[obj] = nil
     end
+    -- Screech directional arrow: geometry and placement adapted from the
+    -- user-supplied Player Directory arrow. Only active with Entity ESP.
+    local screechArrowGui = Instance.new("ScreenGui")
+    screechArrowGui.Name = "HackPanelScreechArrow"
+    screechArrowGui.ResetOnSpawn = false
+    screechArrowGui.IgnoreGuiInset = true
+    screechArrowGui.DisplayOrder = 1000000
+    screechArrowGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+    screechArrowGui.Parent = PlayerGui
+    local screechArrow = Instance.new("Frame")
+    screechArrow.Name = "DirectionalArrow"
+    screechArrow.Size = UDim2.fromOffset(36, 50)
+    screechArrow.AnchorPoint = Vector2.new(0.5, 0.5)
+    screechArrow.BackgroundTransparency = 1
+    screechArrow.BorderSizePixel = 0
+    screechArrow.Visible = false
+    screechArrow.ZIndex = 1000
+    screechArrow.Parent = screechArrowGui
+    local screechHead = Instance.new("Frame")
+    screechHead.Name = "ArrowHead"
+    screechHead.Size = UDim2.fromOffset(30, 26)
+    screechHead.Position = UDim2.fromOffset(3, 0)
+    screechHead.BackgroundTransparency = 1
+    screechHead.BorderSizePixel = 0
+    screechHead.ZIndex = 1002
+    screechHead.Parent = screechArrow
+    local screechArrowColor = Color3.fromRGB(0, 125, 255)
+    for i = 0, 12 do
+        local strip = Instance.new("Frame")
+        strip.Name = "TriangleStrip"
+        strip.BorderSizePixel = 0
+        strip.BackgroundColor3 = screechArrowColor
+        local stripWidth = 2 + i * 2
+        strip.Size = UDim2.fromOffset(stripWidth, 2.1)
+        strip.Position = UDim2.fromOffset(15 - stripWidth / 2, i * 2)
+        strip.ZIndex = 1003
+        strip.Parent = screechHead
+    end
+    local screechShaft = Instance.new("Frame")
+    screechShaft.Name = "ArrowShaft"
+    screechShaft.Size = UDim2.fromOffset(8, 23)
+    screechShaft.Position = UDim2.fromOffset(14, 24)
+    screechShaft.BackgroundColor3 = screechArrowColor
+    screechShaft.BorderSizePixel = 0
+    screechShaft.ZIndex = 1001
+    screechShaft.Parent = screechArrow
+    Instance.new("UICorner", screechShaft).CornerRadius = UDim.new(0, 2)
+    local function updateScreechArrow(camera)
+        screechArrow.Visible = false
+        if not entityEspEnabled or not camera then return end
+        local screech = camera:FindFirstChild("Screech")
+        if not screech then return end
+        local target
+        if screech:IsA("BasePart") then
+            target = screech
+        else
+            for _, candidate in ipairs({"Head", "Screech", "Root", "HumanoidRootPart"}) do
+                local part = screech:FindFirstChild(candidate, true)
+                if part and part:IsA("BasePart") then target = part; break end
+            end
+            if not target then target = screech:FindFirstChildWhichIsA("BasePart", true) end
+        end
+        if not target then return end
+        local vp = camera.ViewportSize
+        local projected, onScreen = camera:WorldToViewportPoint(target.Position)
+        if onScreen and projected.Z > 0
+            and projected.X >= 0 and projected.X <= vp.X
+            and projected.Y >= 0 and projected.Y <= vp.Y then return end
+        local center = Vector2.new(vp.X / 2, vp.Y / 2)
+        local direction = Vector2.new(projected.X - center.X, projected.Y - center.Y)
+        if projected.Z <= 0 then direction = -direction end
+        if direction.Magnitude < 0.001 then direction = Vector2.new(0, -1) end
+        direction = direction.Unit
+        local bounce = math.sin(os.clock() * 4) * 10
+        local radius = math.min(115, vp.X * 0.18, vp.Y * 0.18)
+        local position = center + direction * (radius + bounce)
+        local margin = 40
+        position = Vector2.new(
+            math.clamp(position.X, margin, math.max(margin, vp.X - margin)),
+            math.clamp(position.Y, margin, math.max(margin, vp.Y - margin))
+        )
+        screechArrow.Position = UDim2.fromOffset(position.X, position.Y)
+        screechArrow.Rotation = math.deg(math.atan2(direction.Y, direction.X)) + 90
+        screechArrow.Visible = true
+    end
     local lastAmbushSample = 0
     local entityHudConnection = RunService.RenderStepped:Connect(function()
         if not isCurrentRun() then return end
         -- Both top-of-screen elements use this same frame and detection snapshot.
         alertBanner.Visible = warningBannerRequested
+        updateScreechArrow(workspace.CurrentCamera)
         if not entityEspEnabled then return end
         local sampleAmbush = os.clock() - lastAmbushSample >= 0.08
         if sampleAmbush then lastAmbushSample = os.clock() end
@@ -998,7 +1084,7 @@ end
     updateWarningMonitor = function()
         local anySelected = false
         for _, name in ipairs(entityList) do
-            if activeWarnings[name] then anySelected = true break end
+            if name ~= "Dupe" and activeWarnings[name] then anySelected = true break end
         end
         if not anySelected then
             warningBannerRequested = false
@@ -1014,7 +1100,7 @@ end
         for i, obj in ipairs(objects) do
             if i % 150 == 0 then task.wait() end
             local name = getEntityName(obj)
-            if name and activeWarnings[name] and not obj:IsDescendantOf(Players) then
+            if name and name ~= "Dupe" and activeWarnings[name] and not obj:IsDescendantOf(Players) then
                 local isLive = true
                 local parent = obj.Parent
                 while parent and parent ~= workspace do
@@ -1063,10 +1149,20 @@ end
             end
             if not independentRush then detected.Rush = nil end
         end
+        local warningPhrases = {
+            Rush = "Rush is approaching — find cover!",
+            Ambush = "Ambush is approaching — prepare for rebounds!",
+            Screech = "Screech is nearby — look around!",
+            Eyes = "Eyes appeared — look away!",
+            Halt = "Halt is here — follow its directions!",
+            Figure = "Figure is nearby — stay quiet!",
+            Seek = "Seek chase detected — keep moving!",
+            Sally = "Sally is nearby!",
+        }
         local messages = {}
         for _, name in ipairs(entityList) do
-            if activeWarnings[name] and detected[name] then
-                table.insert(messages, name .. " Is Coming")
+            if name ~= "Dupe" and activeWarnings[name] and detected[name] then
+                table.insert(messages, warningPhrases[name] or (name .. " detected!"))
             end
         end
         warningBannerRequested = #messages > 0
@@ -1089,6 +1185,7 @@ end
         warningBannerRequested = false
         alertBanner.Visible = false
         if alertGui.Parent then alertGui:Destroy() end
+        if screechArrowGui.Parent then screechArrowGui:Destroy() end
     end)
     entityEspButton.MouseButton1Click:Connect(function()
         entityEspEnabled = not entityEspEnabled
