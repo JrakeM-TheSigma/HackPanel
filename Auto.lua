@@ -593,18 +593,35 @@
         local function flat(v)
             return Vector3.new(v.X, 0, v.Z)
         end
+        -- MoveTo is frequently overridden by Roblox's default PlayerModule
+        -- each frame. Drive movement after the default controls instead.
         local function moveQuick(point, seconds)
-            humanoid:MoveTo(point)
+            local binding = "HackPanelLOSDirectMove"
+            local controls = getPlayerControls()
+            local direction = Vector3.zero
+            pcall(function() RunService:UnbindFromRenderStep(binding) end)
+            RunService:BindToRenderStep(binding, Enum.RenderPriority.Input.Value + 4, function()
+                if not navigationActive(generation) or not humanoid.Parent then return end
+                if controls then pcall(function() controls:move(direction, false) end) end
+                humanoid:Move(direction, false)
+            end)
             local started, lastDistance, stalled = os.clock(), math.huge, os.clock()
+            local reached = false
             while navigationActive(generation) and os.clock() - started < seconds do
-                local distance = flat(root.Position - point).Magnitude
-                if distance <= 2.4 then return true end
-                if distance < lastDistance - 0.12 then stalled = os.clock() end
-                if os.clock() - stalled > 0.48 then break end
+                local delta = flat(point - root.Position)
+                local distance = delta.Magnitude
+                if distance <= 2.5 then reached = true; break end
+                direction = delta.Unit
+                if distance < lastDistance - 0.08 then stalled = os.clock() end
+                if os.clock() - stalled > 0.75 then break end
                 lastDistance = distance
                 task.wait(0.05)
             end
-            return flat(root.Position - point).Magnitude <= 3.1
+            direction = Vector3.zero
+            pcall(function() RunService:UnbindFromRenderStep(binding) end)
+            if controls then pcall(function() controls:move(Vector3.zero, false) end) end
+            humanoid:Move(Vector3.zero, false)
+            return reached or flat(point - root.Position).Magnitude <= 3
         end
         local function plantAt(point, door)
             -- Only check a few nearby pieces; do not scan the whole room.
@@ -629,32 +646,39 @@
             if not navigationActive(generation) then return false end
             local door = doors[i]
             local pivot = door.pivot
-            local across = flat(pivot.Position - source)
-            if across.Magnitude < 0.5 then across = flat(pivot.LookVector) end
-            if across.Magnitude > 0.5 then
-                across = across.Unit
-                local right = Vector3.new(-across.Z, 0, across.X)
-                local center = Vector3.new(pivot.Position.X, origin.Y, pivot.Position.Z)
-                -- First walk into the closed door. In DOORS, physical contact
-                -- opens many DoorNormal doors; then continue through the opening.
-                rushStatus.Text = kind .. " - opening side-room door..."
-                moveQuick(center - across * 1.2, 1.25)
-                if not navigationActive(generation) then return false end
-                moveQuick(center + across * 3.8, 1.5)
-                -- Hug the wall on the inside, behind the door. The leftward
-                -- alternative clears the potted plant shown beside some doors.
-                local base = center + across * 4.2
-                local options = {base - right * 3.5, base - right * 6.5,
-                    base + right * 3.5, base + right * 6.5}
-                for _, target in ipairs(options) do
+                -- Door approach must be based on the PLAYER'S side of the
+                -- doorway, not on the simulated threat's location.
+                local across = flat(pivot.Position - root.Position)
+                if across.Magnitude < 0.5 then across = flat(pivot.LookVector) end
+                if across.Magnitude > 0.5 then
+                    across = across.Unit
+                    local right = Vector3.new(-across.Z, 0, across.X)
+                    local center = Vector3.new(pivot.Position.X, origin.Y, pivot.Position.Z)
+                    rushStatus.Text = kind .. " - approaching DoorNormal..."
+                    local approached = moveQuick(center - across * 1.5, 1.8)
                     if not navigationActive(generation) then return false end
-                    if not plantAt(target, door.object) then
-                        rushStatus.Text = kind .. " - moving behind side-room door..."
-                        if moveQuick(target, 1.15) then
-                            local liveSource = entityPosition()
-                            if liveSource and sightBlocked(liveSource + Vector3.new(0, 2, 0), root.Position + Vector3.new(0, 2, 0)) then
-                                rushStatus.Text = kind .. " - behind side-room door"
-                                return true
+                    rushStatus.Text = kind .. " - walking through DoorNormal..."
+                    local entered = moveQuick(center + across * 4.5, 2.6)
+                    if not entered then
+                        rushStatus.Text = kind .. " - doorway blocked (no movement/entry)"
+                    else
+                        -- Try the wall-side position first, then a farther-left
+                        -- offset to clear the plant. Never return to the door
+                        -- between attempts, and don't keep cycling forever.
+                        local base = center + across * 4.5
+                        local options = {base - right * 3.5, base - right * 6.5,
+                            base + right * 3.5}
+                        for _, target in ipairs(options) do
+                            if not navigationActive(generation) then return false end
+                            if not plantAt(target, door.object) then
+                                rushStatus.Text = kind .. " - moving against side-room wall..."
+                                if moveQuick(target, 2.2) then
+                                    local liveSource = entityPosition()
+                                    if liveSource and sightBlocked(liveSource + Vector3.new(0, 2, 0), root.Position + Vector3.new(0, 2, 0)) then
+                                        rushStatus.Text = kind .. " - behind side-room door"
+                                        return true
+                                    end
+                                end
                             end
                         end
                     end
