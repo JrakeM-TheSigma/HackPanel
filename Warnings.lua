@@ -1,5 +1,5 @@
     -- Entity ESP and independently configurable entity warnings.
-    local entityList = {"Rush","Ambush","Seek","Figure","Eyes","Screech","Halt","A-60","A-90","A-120","Blitz","Haste","Vacuum","Giggle","Grumble","Dread","Lookman","Dupe"}
+    local entityList = {"Rush","Ambush","Seek","Figure","Eyes","Screech","Halt","A-60","A-90","A-120","Blitz","Haste","Vacuum","Giggle","Grumble","Dread","Lookman","Dupe","Sally","Queen Grumble","Gloombats","Snare","Surge","Groundskeeper","Eyestalk","Mandrake","Bramble","Honcho","Ransom","Drones","Forget-Me-Not","Teller","Bash","Scribbles","Alma","Portrait","Fih","Creak","Noise","Stem","Meld","Hijack"}
     local aliases = {
         rush="Rush", rushmoving="Rush", rushnew="Rush", rushrig="Rush",
         ambush="Ambush", ambushmoving="Ambush", ambushrig="Ambush",
@@ -8,8 +8,32 @@
         eyes="Eyes", eyesmoving="Eyes", screech="Screech", shade="Halt", dupe="Dupe", seekmovingnewclone="Seek",
         halt="Halt", haltmoving="Halt", a60="A-60", a90="A-90",
         a120="A-120", blitz="Blitz", haste="Haste", vacuum="Vacuum",
-        giggle="Giggle", grumble="Grumble", dread="Dread", lookman="Lookman"
+        giggle="Giggle", grumble="Grumble", dread="Dread", lookman="Lookman", sally="Sally", windowsally="Sally", sallyrig="Sally"
     }
+    -- Warnings only: floor-aware choices. Modifiers reveals the other groups.
+    -- Never infer a modifier is active; the user explicitly opts into extras.
+    local warningFloors = {
+        ["THE HOTEL"] = {"Rush","Ambush","Seek","Figure","Eyes","Screech","Halt","Dread","Dupe","Sally","Snare"},
+        ["THE MINES"] = {"Rush","Ambush","Seek","Figure","Eyes","Screech","Halt","Dread","Dupe","Giggle","Grumble","Queen Grumble","Gloombats"},
+        ["THE BACKDOOR"] = {"Blitz","Haste","Lookman","Vacuum"},
+        ["THE OUTDOORS"] = {"Surge","Groundskeeper","Eyestalk","Mandrake","Bramble","Snare"},
+        ["THE ARCHIVES"] = {"Honcho","Ransom","Drones","Forget-Me-Not","Teller","Bash","Scribbles","Alma","Portrait","Fih"},
+        ["THE STAIRWELL"] = {"Creak","Noise","Stem","Meld","Hijack","Ransom","Portrait"},
+        ["THE ROOMS"] = {"A-60","A-90","A-120"},
+    }
+    local function currentWarningFloor()
+        local data = game:GetService("ReplicatedStorage"):FindFirstChild("GameData")
+        local floorValue = data and (data:FindFirstChild("Floor") or data:FindFirstChild("CurrentFloor"))
+        local raw = floorValue and tostring(floorValue.Value) or ""
+        raw = raw:upper():gsub("^%s+", ""):gsub("%s+$", "")
+        local map = { HOTEL="THE HOTEL", MINES="THE MINES", BACKDOOR="THE BACKDOOR",
+            OUTDOORS="THE OUTDOORS", ARCHIVES="THE ARCHIVES", STAIRWELL="THE STAIRWELL",
+            ROOMS="THE ROOMS", ["FLOOR 1"]="THE HOTEL", ["FLOOR 2"]="THE MINES",
+            ["1"]="THE HOTEL", ["2"]="THE MINES" }
+        if warningFloors[raw] then return raw end
+        return map[raw] -- unknown: do not incorrectly assume Hotel
+    end
+    local modifierExtras = false
     local entityColors = {
         Rush=Color3.fromRGB(255,90,90), Ambush=Color3.fromRGB(80,255,130),
         Seek=Color3.fromRGB(255,180,70), Figure=Color3.fromRGB(255,80,80)
@@ -110,12 +134,12 @@
     local allCheck = makeCheckButton("Select / Deselect All",0)
     allCheck.Parent = hotelPages.Warnings
     allCheck.Position = UDim2.new(0,8,0,6)
-    allCheck.Size = UDim2.new(0.5,-12,0,34)
+    allCheck.Size = UDim2.new(0.35,-12,0,34)
     local searchBox = Instance.new("TextBox")
     searchBox.Name = "WarningEntitySearch"
     searchBox.Parent = hotelPages.Warnings
-    searchBox.Position = UDim2.new(0.5,4,0,6)
-    searchBox.Size = UDim2.new(0.5,-12,0,34)
+    searchBox.Position = UDim2.new(0.35,4,0,6)
+    searchBox.Size = UDim2.new(0.40,-12,0,34)
     searchBox.BackgroundColor3 = Color3.fromRGB(65,48,43)
     searchBox.BorderSizePixel = 0
     searchBox.ClearTextOnFocus = false
@@ -131,6 +155,19 @@
     searchPadding.PaddingLeft = UDim.new(0,10)
     searchPadding.PaddingRight = UDim.new(0,10)
     searchPadding.Parent = searchBox
+    local modifierButton = Instance.new("TextButton")
+    modifierButton.Name = "ModifierExtraEntities"
+    modifierButton.Parent = hotelPages.Warnings
+    modifierButton.Position = UDim2.new(0.75, 4, 0, 6)
+    modifierButton.Size = UDim2.new(0.25, -12, 0, 34)
+    modifierButton.BackgroundColor3 = Color3.fromRGB(75,55,44)
+    modifierButton.BorderSizePixel = 0
+    modifierButton.TextColor3 = Color3.fromRGB(245,232,215)
+    modifierButton.Font = Enum.Font.Gotham
+    modifierButton.TextSize = 12
+    modifierButton.Text = "MODIFIERS: OFF"
+    modifierButton.ZIndex = 39
+    local filterWarnings -- forward declaration
     local function applyWarningSelection()
         for _, name in ipairs(entityList) do
             activeWarnings[name] = pendingWarnings[name]
@@ -157,9 +194,11 @@
     allCheck.MouseButton1Click:Connect(function()
         local allSelected = true
         for _, name in ipairs(entityList) do
-            if not pendingWarnings[name] then allSelected = false break end
+            if checkButtons[name].Visible and not pendingWarnings[name] then allSelected = false break end
         end
-        for _, name in ipairs(entityList) do pendingWarnings[name] = not allSelected end
+        for _, name in ipairs(entityList) do
+            if checkButtons[name].Visible then pendingWarnings[name] = not allSelected end
+        end
         updateChecks()
         applyWarningSelection()
     end)
@@ -167,12 +206,18 @@
 
     -- Search filters visible choices without changing any checked states.
     -- Reflow the matching choices so the grid stays compact.
-    local function filterWarnings()
+    filterWarnings = function()
         local query = searchBox.Text:lower():gsub("^%s+", ""):gsub("%s+$", "")
         local visibleIndex = 0
+        local floor = currentWarningFloor()
+        local permitted = {}
+        if floor and warningFloors[floor] then
+            for _, name in ipairs(warningFloors[floor]) do permitted[name] = true end
+        end
         for _, name in ipairs(entityList) do
             local button = checkButtons[name]
-            local matches = query == "" or name:lower():find(query,1,true) ~= nil
+            local matches = (modifierExtras or not floor or permitted[name])
+                and (query == "" or name:lower():find(query,1,true) ~= nil)
             button.Visible = matches
             if matches then
                 visibleIndex += 1
@@ -184,6 +229,22 @@
         local rows = math.max(1, math.ceil(visibleIndex/3))
         warningLayout.CellSize = UDim2.new(1/3,-8,1/rows,-9)
     end
+    modifierButton.MouseButton1Click:Connect(function()
+        modifierExtras = not modifierExtras
+        modifierButton.Text = modifierExtras and "MODIFIERS: ON" or "MODIFIERS: OFF"
+        filterWarnings()
+    end)
+    task.spawn(function()
+        local previousFloor
+        while isCurrentRun() and warningScroll.Parent do
+            local floor = currentWarningFloor()
+            if floor ~= previousFloor then
+                previousFloor = floor
+                filterWarnings()
+            end
+            task.wait(1)
+        end
+    end)
     searchBox:GetPropertyChangedSignal("Text"):Connect(filterWarnings)
     filterWarnings()
 
