@@ -1494,3 +1494,87 @@ end
 
     showHotelTab("Auto")
 
+
+
+    -- BACKDOOR LEVER ESP: lever assemblies are inside CurrentRooms/*/Assets.
+    ;(function()
+        local enabled = false
+        local leverButton = makeButton(hotelPages.ESP, "LEVER ESP: OFF",
+            UDim2.new(0.5, -130, 0, 334), UDim2.fromOffset(260, 42))
+        leverButton.ZIndex = 42
+        local markers = {}
+        local color = Color3.fromRGB(0, 225, 255)
+        local function clearMarker(instance)
+            local marker = markers[instance]
+            if marker then
+                if marker.highlight then marker.highlight:Destroy() end
+                if marker.billboard then marker.billboard:Destroy() end
+                markers[instance] = nil
+            end
+        end
+        local function addMarker(instance)
+            if markers[instance] then return end
+            local part = instance:IsA("BasePart") and instance
+                or instance:FindFirstChildWhichIsA("BasePart", true)
+            if not part then return end
+            local highlight = Instance.new("Highlight")
+            highlight.Name = "HackPanelLeverHighlight"
+            highlight.Adornee = instance
+            highlight.FillColor = color
+            highlight.OutlineColor = color
+            highlight.FillTransparency = 0.82
+            highlight.OutlineTransparency = 0
+            highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            highlight.Parent = instance
+            local billboard = Instance.new("BillboardGui")
+            billboard.Name = "HackPanelLeverLabel"
+            billboard.Adornee = part
+            billboard.AlwaysOnTop = true
+            billboard.Size = UDim2.fromOffset(110, 26)
+            billboard.StudsOffsetWorldSpace = Vector3.new(0, 2.3, 0)
+            billboard.Parent = PlayerGui
+            local textLabel = Instance.new("TextLabel")
+            textLabel.Size = UDim2.fromScale(1, 1)
+            textLabel.BackgroundTransparency = 1
+            textLabel.Text = "LEVER"
+            textLabel.Font = Enum.Font.GothamBold
+            textLabel.TextSize = 14
+            textLabel.TextColor3 = color
+            textLabel.TextStrokeTransparency = 0.25
+            textLabel.Parent = billboard
+            markers[instance] = {highlight = highlight, billboard = billboard}
+        end
+        leverButton.MouseButton1Click:Connect(function()
+            enabled = not enabled
+            leverButton.Text = enabled and "LEVER ESP: ON" or "LEVER ESP: OFF"
+            if not enabled then
+                for instance in pairs(markers) do clearMarker(instance) end
+            end
+        end)
+        task.spawn(function()
+            while isCurrentRun() and menuGui and menuGui.Parent do
+                if enabled then
+                    local rooms = workspace:FindFirstChild("CurrentRooms")
+                    local found = {}
+                    if rooms then
+                        for _, room in ipairs(rooms:GetChildren()) do
+                            local assets = room:FindFirstChild("Assets")
+                            if assets then
+                                for _, obj in ipairs(assets:GetDescendants()) do
+                                    if obj.Name == "LeverForGate" then
+                                        found[obj] = true
+                                        addMarker(obj)
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    for instance in pairs(markers) do
+                        if not found[instance] or not instance.Parent then clearMarker(instance) end
+                    end
+                end
+                task.wait(0.45)
+            end
+            for instance in pairs(markers) do clearMarker(instance) end
+        end)
+    end)()
