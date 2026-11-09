@@ -770,7 +770,7 @@ local function createMenu()
             setEspEnabled(true)
         end
         keyEspButton.Text = hotelKeyEspEnabled and "KEY ESP: ON" or "KEY ESP: OFF"
-        keyEspButton.BackgroundColor3 = hotelKeyEspEnabled and Color3.fromRGB(40, 125, 75) or Color3.fromRGB(92, 70, 55)
+        keyEspButton.BackgroundColor3 = Color3.fromRGB(92, 70, 55)
     end)
 
     -- Item ESP is intentionally available only in THE CANDY VAULT.
