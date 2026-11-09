@@ -1175,6 +1175,9 @@
             while active() do
                 local now = os.clock()
                 local distance = motion.distance
+                -- The animation/Hide can change the real state asynchronously.
+                -- Don't rely on a cached boolean across rebound cycles.
+                hidden = isActuallyHiding()
                 if now - motion.lastSeen >= 2 then
                     if hidden then leaveCloset(chosen) end
                     rushStatus.Text = "Ambush gone - watching for entities"
@@ -1222,12 +1225,21 @@
                         rushStatus.Text = "Ambush - ready at hiding spot"
                     end
                 else
-                    -- Reset Hide after a confirmed safe outward pass, not only when
-                    -- Ambush despawns. Remain ready for another unexpected rebound.
-                    if motion.returned and motion.retreat and motion.safeRetreat
-                        and now - lastExitAttempt >= 1 then
+                    -- Exit between rebounds after ANY confirmed pass has moved
+                    -- safely away. Previously this required "returned" first,
+                    -- so Ambush could remain in the closet for an entire cycle.
+                    -- Require sustained separation and outward movement to avoid
+                    -- leaving while Ambush is still close or turning around.
+                    local safelyDeparting = motion.nearSeen
+                        and motion.direction == "away"
+                        and motion.awaySamples >= 3
+                        and motion.awaySince
+                        and now - motion.awaySince >= 0.6
+                        and distance and distance >= 200
+                        and motion.planarDistance and motion.planarDistance >= 130
+                    if safelyDeparting and now - lastExitAttempt >= 1 then
                         lastExitAttempt = now
-                        rushStatus.Text = "Ambush return retreated - resetting Hide"
+                        rushStatus.Text = "Ambush passed - exiting to reset Hide"
                         if leaveCloset(chosen) then
                             hidden = false
                             motion.nearSeen = false
