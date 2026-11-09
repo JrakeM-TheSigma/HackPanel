@@ -1,42 +1,72 @@
-    -- Auto-Screech: client-side camera counter (independent of Auto-Hide).
-    -- Screech's live model was previously observed under CurrentCamera.Screech.
+    -- Auto Counter / Screech: aim at the actual camera-side Screech object.
+    -- Diagnostic status makes missing geometry visible instead of failing silently.
     do
         local binding = "HackPanelAutoScreech"
-        local lastTarget = nil
-        local startedAt = 0
-        local function targetPosition(instance)
-            if instance:IsA("BasePart") then return instance.Position end
-            if instance:IsA("Model") then
-                local head = instance:FindFirstChild("Head", true)
-                    or instance:FindFirstChild("Face", true)
-                    or instance:FindFirstChild("Main", true)
-                if head and head:IsA("BasePart") then return head.Position end
-                local part = instance.PrimaryPart or instance:FindFirstChildWhichIsA("BasePart", true)
-                if part then return part.Position end
+        local lastTarget, lastReport, lastAim = nil, "", 0
+        local function report(message)
+            if message ~= lastReport then
+                lastReport = message
+                rushStatus.Text = message
             end
-            return nil
+        end
+        local function screechPosition(camera)
+            if not camera then return nil, nil end
+            local screech = camera:FindFirstChild("Screech", true)
+            if not screech then return nil, nil end
+            if screech:IsA("BasePart") then return screech, screech.Position end
+            if screech:IsA("Attachment") then return screech, screech.WorldPosition end
+            for _, name in ipairs({"Head", "Face", "Root", "Main", "Screech"}) do
+                local part = screech:FindFirstChild(name, true)
+                if part and part:IsA("BasePart") then return screech, part.Position end
+                if part and part:IsA("Attachment") then return screech, part.WorldPosition end
+            end
+            local part = screech:FindFirstChildWhichIsA("BasePart", true)
+            if part then return screech, part.Position end
+            local attachment = screech:FindFirstChildWhichIsA("Attachment", true)
+            if attachment then return screech, attachment.WorldPosition end
+            if screech:IsA("Model") then
+                local ok, pivot = pcall(function() return screech:GetPivot() end)
+                if ok then return screech, pivot.Position end
+            end
+            return screech, nil
         end
         pcall(function() RunService:UnbindFromRenderStep(binding) end)
-        RunService:BindToRenderStep(binding, Enum.RenderPriority.Camera.Value + 20, function()
-            if not rushAutoEnabled then return end
-            if not hotelPages.Auto or not hotelPages.Auto.Parent then
+        RunService:BindToRenderStep(binding, Enum.RenderPriority.Last.Value + 10, function()
+            if not isCurrentRun() then
+                pcall(function() RunService:UnbindFromRenderStep(binding) end)
+                return
+            end
+            if not rushAutoEnabled then
+                lastTarget, lastReport = nil, ""
                 return
             end
             local camera = workspace.CurrentCamera
-            if not camera or camera.CameraType == Enum.CameraType.Scriptable then return end
-            local screech = camera:FindFirstChild("Screech")
-            if not screech then lastTarget = nil; return end
-            local position = targetPosition(screech)
-            if not position then return end
+            local screech, position = screechPosition(camera)
+            if not screech then
+                lastTarget = nil
+                return
+            end
+            if not position then
+                report("Auto Counter: Screech found, no 3D position (check Dex)")
+                return
+            end
             if screech ~= lastTarget then
                 lastTarget = screech
-                startedAt = os.clock()
+                lastAim = 0
             end
-            -- Short burst only: do not lock the camera if the model lingers.
-            if os.clock() - startedAt > 1.1 then return end
+            if screech:GetAttribute("HackPanelScreechCountered") then return end
             local origin = camera.CFrame.Position
-            if (position - origin).Magnitude < 0.1 then return end
+            local offset = position - origin
+            if offset.Magnitude < 0.05 then
+                report("Auto Counter: Screech position too close to camera")
+                return
+            end
+            -- Aim every rendered frame so normal camera scripts cannot overwrite it.
             camera.CFrame = CFrame.lookAt(origin, position)
+            lastAim = os.clock()
+            report("Auto Counter: aiming at Screech")
+            -- Do not mark Screech countered ourselves: gaze alone does not prove
+            -- the game accepted the counter. The arrow can stay until actual removal.
         end)
     end
 
