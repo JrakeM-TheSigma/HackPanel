@@ -719,13 +719,13 @@
                 local function clearOfPlant(point)
                     return not plantAt(point, door.object)
                 end
-                -- The opened door is normally on the local-right side.
-                -- Use a small, fixed offset; don't run across the room.
-                local base = center + across * 1.25 + right * 2.6
+                -- Tuck toward the door's LOCAL LEFT, not its right.
+                -- Previous patches explicitly added +right here, which
+                -- explains the persistent movement to the right.
+                local base = center + across * 1.25 - right * 2.6
                 local target = Vector3.new(base.X, root.Position.Y, base.Z)
                 if not clearOfPlant(target) then
-                    -- If a planter occupies that spot, step a little left
-                    -- while staying on the same side of the doorway.
+                    -- A plant means go FURTHER left along the same wall.
                     target = target - right * 1.2 + across * 0.6
                 end
                 if not clearOfPlant(target) then
