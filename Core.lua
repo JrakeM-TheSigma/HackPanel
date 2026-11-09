@@ -313,7 +313,7 @@ local function createMenu()
     panelVersion.TextSize = 14
     panelVersion.TextXAlignment = Enum.TextXAlignment.Right
     panelVersion.TextColor3 = Color3.fromRGB(210, 184, 158)
-    panelVersion.Text = "v0.1.2"
+    panelVersion.Text = "v0.1.3"
     panelVersion.ZIndex = 3
     panelVersion.Parent = titleBar
 
@@ -669,7 +669,7 @@ local function createMenu()
     rushStatus.Font = Enum.Font.Gotham
     rushStatus.TextSize = 13
     rushStatus.TextColor3 = Color3.fromRGB(255, 231, 206)
-    rushStatus.Text = "Rush auto-hide is off"
+    rushStatus.Text = "Entity auto-hide is off"
     rushStatus.ZIndex = 36
     rushStatus.Parent = doorPanel
 
@@ -790,7 +790,7 @@ local function createMenu()
     autoDescription.Size = UDim2.new(1, -24, 0, 28)
     autoDescription.Position = UDim2.fromOffset(12, 8)
     autoDescription.BackgroundTransparency = 1
-    autoDescription.Text = "Rush assistance and door controls"
+    autoDescription.Text = "Entity assistance and door controls"
     autoDescription.TextColor3 = Color3.fromRGB(245, 225, 197)
     autoDescription.Font = Enum.Font.Gotham
     autoDescription.TextSize = 14
