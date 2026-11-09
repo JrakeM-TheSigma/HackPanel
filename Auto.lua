@@ -574,52 +574,88 @@
         local currentRoom = getCurrentRoom()
         if not currentRoom then return false end
         local origin = root.Position
-        -- Fast side-room doorway fallback: try only nearby side-room doors.
-        -- No node grid or broad geometry scan. Verify LOS after moving.
-        local sideDoors = {}
-        for _, obj in ipairs(currentRoom:GetDescendants()) do
-            if obj:IsA("BasePart") and obj.Name:lower():find("door", 1, true) then
-                local ancestor = obj.Parent
-                local inSideRoom = false
-                while ancestor and ancestor ~= currentRoom do
-                    if ancestor.Name:lower():find("sideroom", 1, true) then
-                        inSideRoom = true
-                        break
+        -- DOORS side-room doors are directly under CurrentRooms[N].DoorNormal.
+        -- Do not search arbitrary geometry or construct a node grid.
+        local doors = {}
+        for _, room in ipairs({currentRoom}) do
+            for _, obj in ipairs(room:GetChildren()) do
+                if obj.Name == "DoorNormal" and (obj:IsA("Model") or obj:IsA("BasePart")) then
+                    local pivot = obj:IsA("Model") and obj:GetPivot() or obj.CFrame
+                    if (pivot.Position - origin).Magnitude <= 45 then
+                        table.insert(doors, {object = obj, pivot = pivot})
                     end
-                    ancestor = ancestor.Parent
-                end
-                if inSideRoom and (obj.Position - origin).Magnitude <= 36 then
-                    table.insert(sideDoors, obj)
                 end
             end
         end
-        table.sort(sideDoors, function(x, y)
-            return (x.Position - origin).Magnitude < (y.Position - origin).Magnitude
+        table.sort(doors, function(a, b)
+            return (a.pivot.Position - origin).Magnitude < (b.pivot.Position - origin).Magnitude
         end)
-        for i = 1, math.min(4, #sideDoors) do
+        local function flat(v)
+            return Vector3.new(v.X, 0, v.Z)
+        end
+        local function moveQuick(point, seconds)
+            humanoid:MoveTo(point)
+            local started, lastDistance, stalled = os.clock(), math.huge, os.clock()
+            while navigationActive(generation) and os.clock() - started < seconds do
+                local distance = flat(root.Position - point).Magnitude
+                if distance <= 2.4 then return true end
+                if distance < lastDistance - 0.12 then stalled = os.clock() end
+                if os.clock() - stalled > 0.48 then break end
+                lastDistance = distance
+                task.wait(0.05)
+            end
+            return flat(root.Position - point).Magnitude <= 3.1
+        end
+        local function plantAt(point, door)
+            -- Only check a few nearby pieces; do not scan the whole room.
+            local params = OverlapParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances = {character, door}
+            local nearby = workspace:GetPartBoundsInRadius(point + Vector3.new(0, 1, 0), 2.6, params)
+            for _, part in ipairs(nearby) do
+                local item = part
+                while item and item ~= currentRoom do
+                    local name = item.Name:lower()
+                    if name:find("plant", 1, true) or name:find("pot", 1, true)
+                        or name:find("bush", 1, true) or name:find("foliage", 1, true) then
+                        return true
+                    end
+                    item = item.Parent
+                end
+            end
+            return false
+        end
+        for i = 1, math.min(#doors, 3) do
             if not navigationActive(generation) then return false end
-            local door = sideDoors[i]
-            local horizontal = Vector3.new(door.Position.X - source.X, 0, door.Position.Z - source.Z)
-            if horizontal.Magnitude > 0.5 then
-                local direction = horizontal.Unit
-                -- Step just past the doorway, toward the side-room interior.
-                for _, offset in ipairs({5, 8}) do
-                    local target = Vector3.new(door.Position.X, origin.Y, door.Position.Z) + direction * offset
-                    if (target - root.Position).Magnitude <= 38
-                        and sightBlocked(source + Vector3.new(0, 2, 0), target + Vector3.new(0, 2, 0)) then
+            local door = doors[i]
+            local pivot = door.pivot
+            local across = flat(pivot.Position - source)
+            if across.Magnitude < 0.5 then across = flat(pivot.LookVector) end
+            if across.Magnitude > 0.5 then
+                across = across.Unit
+                local right = Vector3.new(-across.Z, 0, across.X)
+                local center = Vector3.new(pivot.Position.X, origin.Y, pivot.Position.Z)
+                -- First walk into the closed door. In DOORS, physical contact
+                -- opens many DoorNormal doors; then continue through the opening.
+                rushStatus.Text = kind .. " - opening side-room door..."
+                moveQuick(center - across * 1.2, 1.25)
+                if not navigationActive(generation) then return false end
+                moveQuick(center + across * 3.8, 1.5)
+                -- Hug the wall on the inside, behind the door. The leftward
+                -- alternative clears the potted plant shown beside some doors.
+                local base = center + across * 4.2
+                local options = {base - right * 3.5, base - right * 6.5,
+                    base + right * 3.5, base + right * 6.5}
+                for _, target in ipairs(options) do
+                    if not navigationActive(generation) then return false end
+                    if not plantAt(target, door.object) then
                         rushStatus.Text = kind .. " - moving behind side-room door..."
-                        humanoid:MoveTo(target)
-                        local start = os.clock()
-                        while navigationActive(generation) and os.clock() - start < 1.7 do
-                            if (Vector3.new(root.Position.X, 0, root.Position.Z)
-                                - Vector3.new(target.X, 0, target.Z)).Magnitude <= 3 then break end
-                            task.wait(0.05)
-                        end
-                        humanoid:Move(Vector3.zero, false)
-                        local liveSource = entityPosition()
-                        if liveSource and sightBlocked(liveSource + Vector3.new(0, 2, 0), root.Position + Vector3.new(0, 2, 0)) then
-                            rushStatus.Text = kind .. " - behind side-room door"
-                            return true
+                        if moveQuick(target, 1.15) then
+                            local liveSource = entityPosition()
+                            if liveSource and sightBlocked(liveSource + Vector3.new(0, 2, 0), root.Position + Vector3.new(0, 2, 0)) then
+                                rushStatus.Text = kind .. " - behind side-room door"
+                                return true
+                            end
                         end
                     end
                 end
