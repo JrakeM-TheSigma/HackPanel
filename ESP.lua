@@ -1145,7 +1145,7 @@ end
         -- Target the Door belonging to the current room, without an offset.
         local targetRoomNumber = currentNumber
         local targetRoom = rooms:FindFirstChild(tostring(targetRoomNumber))
-        local nextNumber = currentNumber + 1 -- Display the number on the exit door; target stays in current room.
+        local nextNumber = currentNumber
         local door = targetRoom and targetRoom:FindFirstChild("Door")
         local part = chooseNextDoorPart(door)
         if part ~= nextDoorPart or nextNumber ~= nextDoorRoomNumber then
