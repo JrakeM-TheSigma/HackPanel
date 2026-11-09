@@ -67,6 +67,19 @@
         return ok and result or nil
     end
 
+    -- Check a character-sized corridor, not just the pathfinding centerline.
+    local function corridorBlocked(character, fromPosition, toPosition)
+        local flat = Vector3.new(toPosition.X - fromPosition.X, 0, toPosition.Z - fromPosition.Z)
+        if flat.Magnitude < 0.3 then return false end
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances = {character}
+        params.IgnoreWater = true
+        local origin = fromPosition + Vector3.new(0, 0.2, 0)
+        local cast = workspace:Blockcast(CFrame.new(origin), Vector3.new(3.4, 3.3, 3.4), flat, params)
+        return cast ~= nil and cast.Instance ~= nil and cast.Instance.CanCollide
+    end
+
     local function walkToCloset(candidate, generation)
         local character = LocalPlayer.Character
         local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -75,56 +88,18 @@
         if humanoid.Health <= 0 or humanoid.PlatformStand or humanoid.Sit then
             return false, "Movement disabled (seated / downed)"
         end
-
+        local prompt = candidate.prompt
+        if not prompt or not prompt.Parent then return false, "Closet prompt unavailable" end
         local position = candidate.position
-        local range = candidate.prompt.MaxActivationDistance
-        local acceptable = math.max(2, range - 0.25)
+        local acceptable = math.max(2, prompt.MaxActivationDistance - 0.25)
         local function closeEnough()
-            -- ProximityPrompt distance is measured from the prompt's actual
-            -- world position, not from the wardrobe model's center.
-            local parent = candidate.prompt.Parent
-            local promptPosition = parent and parent:IsA("Attachment") and parent.WorldPosition
-                or (parent and parent:IsA("BasePart") and parent.Position)
-                or position
-            return (root.Position - promptPosition).Magnitude <= acceptable
+            if not prompt.Parent then return false end
+            local parent = prompt.Parent
+            local target = parent:IsA("Attachment") and parent.WorldPosition
+                or (parent:IsA("BasePart") and parent.Position) or position
+            return (root.Position - target).Magnitude <= acceptable
         end
         if closeEnough() then return true end
-
-        -- Lightweight pathfinding: at most two path calculations per approach.
-        -- Never use a straight-line fallback through walls or furniture.
-        local delta = root.Position - position
-        local direction = Vector3.new(delta.X, 0, delta.Z)
-        if direction.Magnitude < 0.1 then direction = Vector3.new(0, 0, 1) end
-        direction = direction.Unit
-        local radius = math.max(1.5, math.min(3, acceptable - 0.6))
-        local approaches = {
-            position + direction * radius,
-            position - direction * radius,
-        }
-        local waypoints
-        for _, target in ipairs(approaches) do
-            if not navigationActive(generation) then
-                return false, "Cancelled"
-            end
-            local ok, path = pcall(function()
-                local result = PathfindingService:CreatePath({
-                    AgentRadius = 1.5, AgentHeight = 5,
-                    AgentCanJump = true, WaypointSpacing = 3
-                })
-                result:ComputeAsync(root.Position, target)
-                return result
-            end)
-            if ok and path and path.Status == Enum.PathStatus.Success then
-                waypoints = path:GetWaypoints()
-                break
-            end
-            task.wait(0.1)
-        end
-        if not waypoints then
-            return false, "No safe path to closet (not walking through walls)"
-        end
-
-        showPathVisual(waypoints, "CLOSET")
 
         local renderName = "HackPanelRushWalk"
         local moveDirection = Vector3.zero
@@ -132,7 +107,7 @@
         pcall(function() RunService:UnbindFromRenderStep(renderName) end)
         RunService:BindToRenderStep(renderName, Enum.RenderPriority.Input.Value + 2, function()
             if movementActive and humanoid.Parent and humanoid.Health > 0 then
-                humanoid:Move(moveDirection, false) -- WORLD space; independent of camera direction
+                humanoid:Move(moveDirection, false)
             end
         end)
         local function stopMoving()
@@ -140,42 +115,82 @@
             moveDirection = Vector3.zero
             pcall(function() RunService:UnbindFromRenderStep(renderName) end)
             pcall(function() humanoid:Move(Vector3.zero, false) end)
+            clearPathVisual()
         end
 
-        local function runPath()
-            local initialPosition = root.Position
-            for _, waypoint in ipairs(waypoints) do
+        local function navigate()
+            local lastFailure = "No safe path to closet"
+            for retry = 1, 4 do
                 if not navigationActive(generation) then return false, "Cancelled" end
                 if closeEnough() then return true end
-                if waypoint.Action == Enum.PathWaypointAction.Jump then humanoid.Jump = true end
-                local started = os.clock()
-                local lastPosition = root.Position
-                local stuckSince = started
-                while os.clock() - started < 6 do
+                local delta = root.Position - position
+                local direction = Vector3.new(delta.X, 0, delta.Z)
+                if direction.Magnitude < 0.1 then direction = Vector3.new(0, 0, 1) end
+                direction = direction.Unit
+                local radius = math.max(2.5, math.min(4, acceptable - 0.5))
+                local approaches = {position + direction * radius, position - direction * radius}
+                local waypoints
+                for _, target in ipairs(approaches) do
+                    local ok, path = pcall(function()
+                        local result = PathfindingService:CreatePath({
+                            AgentRadius = 2.5, AgentHeight = 5,
+                            AgentCanJump = false, WaypointSpacing = 2
+                        })
+                        result:ComputeAsync(root.Position, target)
+                        return result
+                    end)
+                    if ok and path and path.Status == Enum.PathStatus.Success then
+                        waypoints = path:GetWaypoints()
+                        break
+                    end
+                end
+                if not waypoints then return false, "No safe path around obstacles" end
+                showPathVisual(waypoints, "CLOSET")
+                local blocked = false
+                for _, waypoint in ipairs(waypoints) do
                     if closeEnough() then return true end
                     if not navigationActive(generation) then return false, "Cancelled" end
-                    if humanoid.Health <= 0 then return false, "Character died" end
-                    local displacement = waypoint.Position - root.Position
-                    local flat = Vector3.new(displacement.X, 0, displacement.Z)
-                    if flat.Magnitude < 2.5 then break end
-                    moveDirection = flat.Unit
-                    if (root.Position - lastPosition).Magnitude > 0.5 then
-                        lastPosition = root.Position
-                        stuckSince = os.clock()
-                    elseif os.clock() - stuckSince > 2 then
-                        local reason = (root.Position - initialPosition).Magnitude < 0.5
-                            and "PlayerModule movement blocked" or "Path blocked near closet"
-                        return false, reason
+                    local started = os.clock()
+                    local lastProgress = os.clock()
+                    local previousDistance = math.huge
+                    while os.clock() - started < 7 do
+                        if closeEnough() then return true end
+                        if not navigationActive(generation) then return false, "Cancelled" end
+                        if humanoid.Health <= 0 then return false, "Character died" end
+                        local deltaToWaypoint = waypoint.Position - root.Position
+                        local flat = Vector3.new(deltaToWaypoint.X, 0, deltaToWaypoint.Z)
+                        if flat.Magnitude < 2 then break end
+                        -- Validate the next short movement segment with the full body width.
+                        -- A blocked segment forces a fresh path rather than walking into pillars.
+                        local lookahead = math.min(flat.Magnitude, 3.5)
+                        if corridorBlocked(character, root.Position, root.Position + flat.Unit * lookahead) then
+                            blocked = true
+                            lastFailure = "Solid obstacle blocking path"
+                            break
+                        end
+                        moveDirection = flat.Unit
+                        if flat.Magnitude < previousDistance - 0.25 then
+                            lastProgress = os.clock()
+                        elseif os.clock() - lastProgress > 1.3 then
+                            blocked = true
+                            lastFailure = "Stuck near obstacle"
+                            break
+                        end
+                        previousDistance = flat.Magnitude
+                        task.wait(0.06)
                     end
-                    task.wait(0.06)
+                    moveDirection = Vector3.zero
+                    if blocked then break end
                 end
+                if closeEnough() then return true end
+                lastFailure = blocked and lastFailure or "Could not reach closet prompt"
+                task.wait(0.12)
             end
-            return closeEnough(), "Could not get within prompt range"
+            return false, lastFailure
         end
-
-        local succeeded, reached, reason = pcall(runPath)
-        stopMoving() -- always release automatic movement, including errors/cancellation
-        if not succeeded then return false, "Movement error: " .. tostring(reached):sub(1, 80) end
+        local ok, reached, reason = pcall(navigate)
+        stopMoving()
+        if not ok then return false, "Movement error: " .. tostring(reached):sub(1, 80) end
         return reached, reason
     end
 
@@ -323,56 +338,61 @@
     end
 
     local function leaveCloset(candidate)
-        rushStatus.Text = "Rush passed - holding W to leave closet..."
-        -- In DOORS the closet exit is triggered by forward INPUT, not by
-        -- setting a world-space Humanoid movement vector. Keep issuing W
-        -- until hiding clears, with a bounded retry window.
-        local vim = game:GetService("VirtualInputManager")
-        local function sendW(down)
-            local keyFn = down and keypress or keyrelease
-            if type(keyFn) == "function" then
-                local ok = pcall(keyFn, 0x57)
-                if ok then return true end
-            end
-            return pcall(function()
-                vim:SendKeyEvent(down, Enum.KeyCode.W, false, game)
-            end)
-        end
+        rushStatus.Text = "Rush passed - exiting closet..."
+        local character = LocalPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        if not humanoid or not root then return false end
+        local originalPosition = root.Position
+        local initiallyHiding = isActuallyHiding()
         local controls = getPlayerControls()
-        local start = os.clock()
+        local vim = game:GetService("VirtualInputManager")
+        local function key(down)
+            -- Send both supported input paths; one executor method succeeding
+            -- doesn't prove the game received the input.
+            local fn = down and keypress or keyrelease
+            if type(fn) == "function" then pcall(fn, 0x57) end
+            pcall(function() vim:SendKeyEvent(down, Enum.KeyCode.W, false, game) end)
+        end
         local exited = false
-        local initialHiding = isActuallyHiding()
-        -- Some versions don't expose a hiding flag; retry a few times even
-        -- when the state cannot be confirmed.
-        for attempt = 1, 5 do
+        local renderName = "HackPanelClosetExit"
+        pcall(function() RunService:UnbindFromRenderStep(renderName) end)
+        -- DOORS may listen to forward controls or humanoid movement depending on
+        -- version. Keep both active for a short interval, then release everything.
+        for attempt = 1, 6 do
             if not rushAutoEnabled then break end
-            sendW(true)
-            local untilTime = os.clock() + 0.45
-            while os.clock() < untilTime do
-                if controls then
-                    pcall(function() controls:move(Vector3.new(0, 0, -1), true) end)
+            key(true)
+            RunService:BindToRenderStep(renderName, Enum.RenderPriority.Input.Value + 3, function()
+                if humanoid.Parent and humanoid.Health > 0 then
+                    if controls then pcall(function() controls:move(Vector3.new(0, 0, -1), true) end) end
+                    humanoid:Move(Vector3.new(0, 0, -1), true)
                 end
+            end)
+            local deadline = os.clock() + 0.65
+            while os.clock() < deadline do
                 task.wait(0.05)
-                if initialHiding and not isActuallyHiding() then
-                    exited = true
-                    break
+                if initiallyHiding and not isActuallyHiding() then exited = true; break end
+                if not initiallyHiding and (root.Position - originalPosition).Magnitude > 3 then
+                    exited = true; break
                 end
             end
-            sendW(false)
+            pcall(function() RunService:UnbindFromRenderStep(renderName) end)
+            key(false)
             if controls then pcall(function() controls:move(Vector3.zero, true) end) end
+            pcall(function() humanoid:Move(Vector3.zero, false) end)
             if exited then break end
             task.wait(0.12)
         end
-        sendW(false)
+        pcall(function() RunService:UnbindFromRenderStep(renderName) end)
+        key(false)
         if controls then pcall(function() controls:move(Vector3.zero, true) end) end
-        task.wait(0.2)
-        if exited or (initialHiding and not isActuallyHiding()) then
+        pcall(function() humanoid:Move(Vector3.zero, false) end)
+        if exited then
             rushStatus.Text = "Rush passed - exited closet"
-        elseif isActuallyHiding() then
-            rushStatus.Text = "Rush passed - still hiding; press W manually"
         else
-            rushStatus.Text = "Rush passed - forward exit attempted (unconfirmed)"
+            rushStatus.Text = "Rush passed - exit unconfirmed; press W manually"
         end
+        return exited
     end
 
     local function adjacentRoomPassable(currentRoom, adjacentRoom)
@@ -486,7 +506,7 @@
                         if distance then
                             goneSince = nil
                             closestDistance = math.min(closestDistance, distance)
-                            if distance <= 75 then rushWasClose = true end
+                            if distance <= RUSH_ENTER_DISTANCE then rushWasClose = true end
                             if rushWasClose and previousDistance
                                 and distance > previousDistance + 0.6 then
                                 recedingSamples = math.min(recedingSamples + 1, 20)
@@ -514,9 +534,11 @@
                             and os.clock() - goneSince >= RUSH_MISSING_SECONDS
                         if passed or vanishedAfterApproach then
                             rushStatus.Text = "Rush passed closet - exiting..."
-                            leaveCloset(candidate)
-                            rushHiddenByAutomation = false
-                            rushHidingCandidate = nil
+                            local exited = leaveCloset(candidate)
+                            if exited then
+                                rushHiddenByAutomation = false
+                                rushHidingCandidate = nil
+                            end
                             break
                         end
                         task.wait(0.1)
