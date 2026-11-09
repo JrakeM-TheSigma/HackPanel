@@ -25,44 +25,70 @@
         return entityModel("Ambush")
     end
 
+    -- Find actual hiding prompts, including beds and wardrobes in nested subrooms.
+    -- A visible bed without a usable prompt is not a valid hiding spot.
     local function closetCandidates(origin)
-        -- Search the current room and the two numerically adjacent loaded rooms.
-        -- This avoids scanning the whole workspace or all loaded rooms.
         local current, number = getCurrentRoom()
         local rooms = getCurrentRooms()
-        if not rooms or not current then return {} end
-        local searchRooms = {current}
+        if not rooms then return {} end
+        local searchRooms, seenRooms = {}, {}
+        local function addRoom(room)
+            if room and room:IsA("Model") and not seenRooms[room] then
+                seenRooms[room] = true
+                table.insert(searchRooms, room)
+            end
+        end
+        addRoom(current)
         if number then
-            for _, offset in ipairs({-1, 1}) do
-                local adjacent = rooms:FindFirstChild(tostring(number + offset))
-                if adjacent and adjacent:IsA("Model") then
-                    table.insert(searchRooms, adjacent)
-                end
+            addRoom(rooms:FindFirstChild(tostring(number - 1)))
+            addRoom(rooms:FindFirstChild(tostring(number + 1)))
+        end
+        -- Streaming/room counters can disagree with the physical subroom.
+        -- Include loaded room models nearby, without searching the whole Workspace.
+        for _, room in ipairs(rooms:GetChildren()) do
+            if room:IsA("Model") and not seenRooms[room] then
+                local ok, pivot = pcall(function() return room:GetPivot().Position end)
+                if ok and (pivot - origin).Magnitude < 150 then addRoom(room) end
             end
         end
         local candidates, seen = {}, {}
         for _, room in ipairs(searchRooms) do
-            for _, obj in ipairs(room:GetDescendants()) do
-                if obj:IsA("Model") then
-                    local name = obj.Name:lower()
-                    if name:find("wardrobe", 1, true) or name:find("closet", 1, true) then
-                        local prompt = obj:FindFirstChildWhichIsA("ProximityPrompt", true)
-                        if prompt and prompt.Enabled and not seen[prompt] then
-                            seen[prompt] = true
-                            local holder = prompt.Parent
-                            local pos = holder:IsA("Attachment") and holder.WorldPosition
-                                or (holder:IsA("BasePart") and holder.Position)
-                                or obj:GetPivot().Position
+            for _, prompt in ipairs(room:GetDescendants()) do
+                if prompt:IsA("ProximityPrompt") and prompt.Enabled and not seen[prompt] then
+                    local ancestor = prompt.Parent
+                    local hidingModel, kind
+                    while ancestor and ancestor ~= room do
+                        local name = ancestor.Name:lower()
+                        if name:find("wardrobe", 1, true) or name:find("closet", 1, true) then
+                            hidingModel, kind = ancestor, "Closet"
+                            break
+                        elseif name:find("bed", 1, true) then
+                            hidingModel, kind = ancestor, "Bed"
+                            break
+                        end
+                        ancestor = ancestor.Parent
+                    end
+                    if hidingModel then
+                        seen[prompt] = true
+                        local holder = prompt.Parent
+                        local pos = holder:IsA("Attachment") and holder.WorldPosition
+                            or (holder:IsA("BasePart") and holder.Position)
+                            or (hidingModel:IsA("Model") and hidingModel:GetPivot().Position)
+                        if pos then
                             local distance = (pos - origin).Magnitude
                             if distance <= 110 then
-                                table.insert(candidates, {model=obj, prompt=prompt, position=pos, distance=distance, room=room, currentRoom=(room == current)})
+                                table.insert(candidates, {
+                                    model = hidingModel, prompt = prompt, position = pos,
+                                    distance = distance, room = room,
+                                    currentRoom = (room == current), kind = kind
+                                })
                             end
                         end
                     end
                 end
             end
         end
-        table.sort(candidates, function(x,y) return x.distance < y.distance end)
+        table.sort(candidates, function(x, y) return x.distance < y.distance end)
         return candidates
     end
 
@@ -137,7 +163,15 @@
                 if direction.Magnitude < 0.1 then direction = Vector3.new(0, 0, 1) end
                 direction = direction.Unit
                 local radius = math.max(2.5, math.min(4, acceptable - 0.5))
-                local approaches = {position + direction * radius, position - direction * radius}
+                local side = Vector3.new(-direction.Z, 0, direction.X)
+                local approaches = {
+                    position + direction * radius,
+                    position + side * radius,
+                    position - side * radius,
+                    position - direction * radius,
+                    position + (direction + side).Unit * radius,
+                    position + (direction - side).Unit * radius
+                }
                 local waypoints
                 for _, target in ipairs(approaches) do
                     local ok, path = pcall(function()
@@ -577,7 +611,7 @@
             end
         end
         if not completed and rushAutoEnabled and rushGeneration == generation then
-            rushStatus.Text = "No reachable closet in accessible rooms"
+            rushStatus.Text = "No reachable hiding spot in accessible rooms"
         end
         rushBusy = false
     end
@@ -603,16 +637,18 @@
                 return a.distance < b.distance
             end)
             local chosen
+            local lastReason = "No hiding spots found"
             for i, candidate in ipairs(candidates) do
                 if not active() then return end
                 if candidate.currentRoom or adjacentRoomPassable(currentRoom, candidate.room) then
-                    rushStatus.Text = "Ambush - reaching closet " .. i .. "/" .. #candidates
-                    local reached = walkToCloset(candidate, generation)
+                    rushStatus.Text = "Ambush - reaching " .. (candidate.kind or "hide spot") .. " " .. i .. "/" .. #candidates
+                    local reached, reason = walkToCloset(candidate, generation)
                     if reached then chosen = candidate; break end
+                    lastReason = tostring(reason or "Path failed")
                 end
             end
             if not chosen then
-                rushStatus.Text = "Ambush - no reachable closet"
+                rushStatus.Text = "Ambush - no reachable hiding spot: " .. lastReason
                 return
             end
             local hidden = isActuallyHiding()
