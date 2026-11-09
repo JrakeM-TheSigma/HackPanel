@@ -277,6 +277,21 @@ local function createMenu()
     title.Text = "HACK PANEL"
     title.Parent = titleBar
 
+    -- Central version label; change this once per released panel build.
+    local panelVersion = Instance.new("TextLabel")
+    panelVersion.Name = "HackPanelVersion"
+    panelVersion.BackgroundTransparency = 1
+    panelVersion.AnchorPoint = Vector2.new(1, 0)
+    panelVersion.Position = UDim2.new(1, -12, 0, 0)
+    panelVersion.Size = UDim2.fromOffset(145, 36)
+    panelVersion.Font = Enum.Font.Code
+    panelVersion.TextSize = 14
+    panelVersion.TextXAlignment = Enum.TextXAlignment.Right
+    panelVersion.TextColor3 = Color3.fromRGB(210, 184, 158)
+    panelVersion.Text = "v0.1.0"
+    panelVersion.ZIndex = 3
+    panelVersion.Parent = titleBar
+
     menuBody = Instance.new("Frame")
     menuBody.BackgroundTransparency = 1
     menuBody.Position = UDim2.fromOffset(12, 48)
