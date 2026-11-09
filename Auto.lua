@@ -733,39 +733,48 @@
                     return false
                 end
                 rushStatus.Text = kind .. " - stepping back behind door..."
+                -- Use ONE continuous movement command for both the tuck
+                -- and the extra five seconds. The previous implementation
+                -- stopped, unbound movement, and started another controller.
                 local tuckOffset = flat(target - root.Position)
-                local tuckDirection = tuckOffset.Magnitude > 0.1 and tuckOffset.Unit or Vector3.zero
-                moveQuick(target, 2.2)
-                if not navigationActive(generation) then return false end
-                local remaining = flat(target - root.Position).Magnitude
-                if remaining > 3.2 then
+                if tuckOffset.Magnitude < 0.1 then
+                    rushStatus.Text = kind .. " - already behind door"
+                    return false
+                end
+                local tuckDirection = tuckOffset.Unit
+                local binding = "HackPanelLOSContinuousTuck"
+                local controls = getPlayerControls()
+                pcall(function() RunService:UnbindFromRenderStep(binding) end)
+                RunService:BindToRenderStep(binding, Enum.RenderPriority.Input.Value + 4, function()
+                    if navigationActive(generation) and humanoid.Parent then
+                        if controls then pcall(function() controls:move(tuckDirection, false) end) end
+                        humanoid:Move(tuckDirection, false)
+                    end
+                end)
+                rushStatus.Text = kind .. " - moving behind door..."
+                local tuckStarted = os.clock()
+                local tuckReached = false
+                while navigationActive(generation) and os.clock() - tuckStarted < 2.2 do
+                    if flat(target - root.Position).Magnitude <= 2.5 then
+                        tuckReached = true
+                        break
+                    end
+                    task.wait(0.05)
+                end
+                if tuckReached and navigationActive(generation) then
+                    rushStatus.Text = kind .. " - continuing SAME direction (5s)..."
+                    local holdStarted = os.clock()
+                    while navigationActive(generation) and os.clock() - holdStarted < 5 do
+                        task.wait(0.05)
+                    end
+                end
+                pcall(function() RunService:UnbindFromRenderStep(binding) end)
+                if controls then pcall(function() controls:move(Vector3.zero, false) end) end
+                humanoid:Move(Vector3.zero, false)
+                if not tuckReached then
                     rushStatus.Text = kind .. " - could not reach behind door"
                     return false
                 end
-                -- Keep walking in the SAME direction used to tuck behind the
-                -- door. Do not rescan walls or pick a different side afterward.
-                local holdDirection = tuckDirection
-                if holdDirection.Magnitude < 0.1 then
-                    rushStatus.Text = kind .. " - no tuck direction; stopping"
-                    return false
-                end
-                local holdBinding = "HackPanelLOSWallHold"
-                local controls = getPlayerControls()
-                pcall(function() RunService:UnbindFromRenderStep(holdBinding) end)
-                rushStatus.Text = kind .. " - continuing behind door (5s)..."
-                RunService:BindToRenderStep(holdBinding, Enum.RenderPriority.Input.Value + 4, function()
-                    if navigationActive(generation) and humanoid.Parent then
-                        if controls then pcall(function() controls:move(holdDirection, false) end) end
-                        humanoid:Move(holdDirection, false)
-                    end
-                end)
-                local holdStart = os.clock()
-                while navigationActive(generation) and os.clock() - holdStart < 5 do
-                    task.wait(0.05)
-                end
-                pcall(function() RunService:UnbindFromRenderStep(holdBinding) end)
-                if controls then pcall(function() controls:move(Vector3.zero, false) end) end
-                humanoid:Move(Vector3.zero, false)
                 if not navigationActive(generation) then return false end
                 local threat = entityPosition()
                 if threat and sightBlocked(threat + Vector3.new(0, 2, 0), root.Position + Vector3.new(0, 2, 0)) then
