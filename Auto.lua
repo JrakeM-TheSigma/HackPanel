@@ -1202,10 +1202,14 @@
                     elseif tooFar then
                         rushStatus.Text = "Ambush - returning to hiding spot..."
                     -- Go to safety immediately, but enter only on approach or emergency proximity.
-                    elseif distance and (distance <= 65 or
-                        (distance <= 180 and motion.direction == "toward"
-                            and motion.towardSamples >= 2))
-                        and now - lastHideAttempt >= 0.7 then
+                    -- Ambush rebounds are fast: allow enough lead time for
+                    -- the E interaction AND the entering animation to finish.
+                    -- A single confirmed 0.24s approach sample is enough on
+                    -- rebound; the old two-sample / 180-stud rule was too late.
+                    elseif distance and (distance <= 105 or
+                        (distance <= 280 and motion.direction == "toward"
+                            and motion.towardSamples >= 1))
+                        and now - lastHideAttempt >= 0.35 then
                         lastHideAttempt = now
                         rushStatus.Text = "Ambush approaching - entering hiding spot"
                         local success, reason = tryHide(chosen, generation)
