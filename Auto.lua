@@ -615,21 +615,34 @@
                 rushStatus.Text = "Ambush - no reachable closet"
                 return
             end
-            local hidden = false
+            local hidden = isActuallyHiding()
             local missingSince = nil
             local returnPasses = 0
             local previousDistance = nil
-            local movingAway = 0
-            local movingToward = 0
-            local farSince = nil
-            local exitStarted = false
-            local sawFirstDeparture = false
-            -- Ambush is fast: enter as soon as it comes within 180 studs.
+            local previousSampleAt = nil
+            local direction = "stationary"
+            local directionSince = os.clock()
+            local lastMovementAt = 0
+            -- Explicit phases prevent the first outward pass from being
+            -- mistaken for a completed return. Stationary samples never
+            -- advance the phase or authorize an exit.
+            local phase = "await_first_pass"
+            local firstPassFarSince = nil
+            local returnNearSince = nil
+            local retreatFarSince = nil
+            local lastHideAttempt = 0
+            local function setPhase(nextPhase)
+                phase = nextPhase
+                firstPassFarSince = nil
+                returnNearSince = nil
+                retreatFarSince = nil
+            end
             while active() do
+                local now = os.clock()
                 local distance = entityDistance("Ambush")
                 if not distance then
-                    missingSince = missingSince or os.clock()
-                    if os.clock() - missingSince >= 1.5 then
+                    missingSince = missingSince or now
+                    if now - missingSince >= 2 then
                         if hidden then
                             rushStatus.Text = "Ambush gone - leaving closet"
                             leaveCloset(chosen)
@@ -639,63 +652,98 @@
                     end
                 else
                     missingSince = nil
-                    if previousDistance then
-                        if distance > previousDistance + 1 then
-                            movingAway += 1
-                            movingToward = 0
-                        elseif distance < previousDistance - 1 then
-                            movingToward += 1
-                            movingAway = 0
+                    if previousDistance and previousSampleAt then
+                        local delta = distance - previousDistance
+                        local nextDirection = math.abs(delta) < 1.5 and "stationary"
+                            or (delta > 0 and "away" or "toward")
+                        if nextDirection ~= direction then
+                            direction = nextDirection
+                            directionSince = now
                         end
+                        if nextDirection ~= "stationary" then lastMovementAt = now end
                     end
-                    if not hidden and distance <= 180 then
-                        rushStatus.Text = "Ambush approaching - hiding early"
-                        local success, reason = tryHide(chosen, generation)
-                        if success then
-                            hidden = true
-                            returnPasses = 0
-                            exitStarted = false
-                            sawFirstDeparture = false
-                            farSince = nil
-                        else
-                            rushStatus.Text = "Ambush - hide failed: " .. tostring(reason)
-                        end
-                    elseif hidden then
-                        -- Only count the return trip after Ambush has first
-                        -- traveled away and then approached the closet again.
-                        if movingAway >= 3 and distance >= 90 then
-                            sawFirstDeparture = true
-                        end
-                        if sawFirstDeparture and movingToward >= 2 and distance < 110 then
-                            exitStarted = true
-                        end
-                        if exitStarted and movingAway >= 3 and distance >= 95 then
-                            farSince = farSince or os.clock()
-                            if os.clock() - farSince >= 0.25 then
-                                returnPasses += 1
-                                rushStatus.Text = "Ambush return passed - resetting Hide"
-                                local exited = leaveCloset(chosen)
-                                if exited then
-                                    hidden = false
-                                    -- Re-enter on the next approach, or immediately
-                                    -- if Ambush turns back sooner than expected.
-                                    previousDistance = nil
-                                    movingToward, movingAway = 0, 0
-                                    farSince = nil
-                                else
-                                    rushStatus.Text = "Ambush - closet exit unconfirmed"
-                                end
-                                exitStarted = false
-                                sawFirstDeparture = false
+                    local stableAway = direction == "away" and now - directionSince >= 0.18
+                        and now - lastMovementAt <= 0.18
+                    local stableToward = direction == "toward" and now - directionSince >= 0.12
+                        and now - lastMovementAt <= 0.18
+
+                    if not hidden then
+                        -- Don't enter merely because a stationary spawn is
+                        -- nearby. Emergency proximity still takes priority.
+                        local shouldHide = distance <= 65
+                            or (distance <= 220 and stableToward)
+                        if shouldHide and now - lastHideAttempt >= 0.7 then
+                            lastHideAttempt = now
+                            rushStatus.Text = "Ambush approaching - hiding early"
+                            local success, reason = tryHide(chosen, generation)
+                            if success then
+                                hidden = true
+                                setPhase("await_first_pass")
+                            else
+                                rushStatus.Text = "Ambush - hide failed: " .. tostring(reason)
                             end
+                        elseif direction == "stationary" then
+                            rushStatus.Text = "Ambush stationary - waiting at closet"
                         else
-                            farSince = nil
-                            rushStatus.Text = "Ambush - hidden, watching rebound " .. tostring(returnPasses + 1)
+                            rushStatus.Text = "Ambush - ready to hide"
                         end
                     else
-                        rushStatus.Text = "Ambush - ready at closet"
+                        if phase == "await_first_pass" then
+                            -- The first pass is complete only after Ambush
+                            -- was near and has traveled away for a while.
+                            if distance <= 75 then
+                                firstPassFarSince = nil
+                                setPhase("await_first_departure")
+                            end
+                        elseif phase == "await_first_departure" then
+                            if stableAway and distance >= 110 then
+                                firstPassFarSince = firstPassFarSince or now
+                                if now - firstPassFarSince >= 0.35 then
+                                    setPhase("await_return")
+                                end
+                            else
+                                firstPassFarSince = nil
+                            end
+                        elseif phase == "await_return" then
+                            if stableToward and distance <= 85 then
+                                returnNearSince = returnNearSince or now
+                                if now - returnNearSince >= 0.12 then
+                                    setPhase("await_return_retreat")
+                                end
+                            else
+                                returnNearSince = nil
+                            end
+                        elseif phase == "await_return_retreat" then
+                            -- Never exit just because the distance is large:
+                            -- the return must have passed, and Ambush must
+                            -- be demonstrably moving AWAY right now.
+                            if stableAway and distance >= 130 then
+                                retreatFarSince = retreatFarSince or now
+                                if now - retreatFarSince >= 0.4 then
+                                    rushStatus.Text = "Ambush returned and retreated - resetting Hide"
+                                    local exited = leaveCloset(chosen)
+                                    if exited then
+                                        hidden = false
+                                        returnPasses += 1
+                                        setPhase("await_first_pass")
+                                        previousDistance = nil
+                                        previousSampleAt = nil
+                                        direction = "stationary"
+                                        directionSince = os.clock()
+                                    else
+                                        rushStatus.Text = "Ambush - exit unconfirmed"
+                                    end
+                                end
+                            else
+                                retreatFarSince = nil
+                            end
+                        end
+                        if hidden then
+                            rushStatus.Text = "Ambush hidden - " .. phase
+                        end
                     end
                     previousDistance = distance
+                    previousSampleAt = now
                 end
                 task.wait(0.06)
             end
