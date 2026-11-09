@@ -313,7 +313,7 @@ local function createMenu()
     panelVersion.TextSize = 14
     panelVersion.TextXAlignment = Enum.TextXAlignment.Right
     panelVersion.TextColor3 = Color3.fromRGB(210, 184, 158)
-    panelVersion.Text = "v0.1.21"
+    panelVersion.Text = "v0.1.22"
     panelVersion.ZIndex = 3
     panelVersion.Parent = titleBar
 
