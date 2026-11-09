@@ -730,6 +730,7 @@
             local hidden = isActuallyHiding()
             local lastHideAttempt = 0
             local lastExitAttempt = 0
+            local lastReturnAttempt = 0
             while active() do
                 local now = os.clock()
                 local distance = motion.distance
@@ -739,8 +740,28 @@
                     return
                 end
                 if not hidden then
+                    -- Keep the chosen bed/closet as our anchor between rebounds.
+                    -- If the player walks away, navigate back before attempting E.
+                    local currentCharacter = LocalPlayer.Character
+                    local currentRoot = currentCharacter and currentCharacter:FindFirstChild("HumanoidRootPart")
+                    local holder = chosen.prompt and chosen.prompt.Parent
+                    local promptPosition = holder and holder:IsA("Attachment") and holder.WorldPosition
+                        or (holder and holder:IsA("BasePart") and holder.Position)
+                        or chosen.position
+                    local promptRange = chosen.prompt and chosen.prompt.MaxActivationDistance or 6
+                    local tooFar = currentRoot and promptPosition and
+                        (currentRoot.Position - promptPosition).Magnitude > math.max(2, promptRange - 0.25)
+                    if tooFar and now - lastReturnAttempt >= 0.6 then
+                        lastReturnAttempt = now
+                        rushStatus.Text = "Ambush - moved away, returning to hiding spot..."
+                        local returned, reason = walkToCloset(chosen, generation)
+                        if not returned then
+                            rushStatus.Text = "Ambush - return failed: " .. tostring(reason)
+                        end
+                    elseif tooFar then
+                        rushStatus.Text = "Ambush - returning to hiding spot..."
                     -- Go to safety immediately, but enter only on approach or emergency proximity.
-                    if distance and (distance <= 65 or
+                    elseif distance and (distance <= 65 or
                         (distance <= 220 and motion.direction == "toward"))
                         and now - lastHideAttempt >= 0.7 then
                         lastHideAttempt = now
