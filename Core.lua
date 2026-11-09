@@ -163,6 +163,31 @@ local function updateCursor()
     end
 end
 
+-- ==========================================================
+-- MENU TOGGLE
+-- ==========================================================
+
+inputConnection = UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+    if not scriptRunning then
+        return
+    end
+
+    -- Ignore menu shortcuts while the player is typing in a search/text box.
+    if UserInputService:GetFocusedTextBox() then
+        return
+    end
+
+    if input.KeyCode == TOGGLE_KEY and menuGui then
+        menuGui.Enabled = not menuGui.Enabled
+        updateCursor()
+    elseif input.KeyCode == Enum.KeyCode.Minus and menuGui then
+        local debugPanel = menuGui:FindFirstChild("ImageTestStatus", true)
+        if debugPanel then
+            debugPanel.Visible = not debugPanel.Visible
+        end
+    end
+end)
+
 local function updateEspButton()
     if espButton then
         espButton.Text = isEspActive and "ESP: ON" or "ESP: OFF"
