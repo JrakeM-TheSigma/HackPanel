@@ -461,25 +461,5 @@ end
 createMenu()
 updateCursor()
 
--- ==========================================================
--- MENU TOGGLE
--- ==========================================================
-
-inputConnection = UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
-    if not scriptRunning then
-        return
-    end
-
-    if input.KeyCode == TOGGLE_KEY and menuGui then
-        menuGui.Enabled = not menuGui.Enabled
-        updateCursor()
-    elseif input.KeyCode == Enum.KeyCode.Minus and menuGui then
-        local debugPanel = menuGui:FindFirstChild("ImageTestStatus", true)
-        if debugPanel then
-            debugPanel.Visible = not debugPanel.Visible
-        end
-    end
-end)
-
 -- Start with ESP disabled.
 clearOldESP()
