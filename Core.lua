@@ -313,7 +313,7 @@ local function createMenu()
     panelVersion.TextSize = 14
     panelVersion.TextXAlignment = Enum.TextXAlignment.Right
     panelVersion.TextColor3 = Color3.fromRGB(210, 184, 158)
-    panelVersion.Text = "v0.1.1"
+    panelVersion.Text = "v0.1.2"
     panelVersion.ZIndex = 3
     panelVersion.Parent = titleBar
 
@@ -674,7 +674,7 @@ local function createMenu()
     rushStatus.Parent = doorPanel
 
     doorPanel.Size = UDim2.new(0.9, 0, 0, 250)
-    local rushButton = makeButton(doorPanel, "RUSH AUTO-HIDE: OFF", UDim2.new(0.5, -130, 0, 165), UDim2.fromOffset(260, 45))
+    local rushButton = makeButton(doorPanel, "ENTITY AUTO-HIDE: OFF", UDim2.new(0.5, -130, 0, 165), UDim2.fromOffset(260, 45))
     rushButton.ZIndex = 35
     rushStatus.Position = UDim2.new(0, 10, 0, 215)
 
