@@ -587,8 +587,54 @@
                 end
             end
         end
+        -- Prefer a roomy side chamber over a cramped alcove close to the
+        -- entity's route. Estimate usable space with a handful of raycasts;
+        -- no node grid, no path search, no repeated switching between doors.
+        local spaceParams = RaycastParams.new()
+        spaceParams.FilterType = Enum.RaycastFilterType.Exclude
+        spaceParams.IgnoreWater = true
+        local function roomSpaceScore(entry)
+            local doorPos = entry.pivot.Position
+            local inward = Vector3.new(doorPos.X - origin.X, 0, doorPos.Z - origin.Z)
+            if inward.Magnitude < 0.5 then
+                local look = entry.pivot.LookVector
+                inward = Vector3.new(look.X, 0, look.Z)
+            end
+            if inward.Magnitude < 0.1 then return 0 end
+            inward = inward.Unit
+            local sideways = Vector3.new(-inward.Z, 0, inward.X)
+            local sample = doorPos + inward * 5 + Vector3.new(0, 2.5, 0)
+            spaceParams.FilterDescendantsInstances = {character, entry.object}
+            local function freeDistance(direction)
+                local remaining, pos = 17, sample
+                -- Ignore decorative parts, but stop at actual solid walls.
+                for _ = 1, 3 do
+                    local hit = workspace:Raycast(pos, direction * remaining, spaceParams)
+                    if not hit then return 17 end
+                    local travelled = (hit.Position - sample).Magnitude
+                    if hit.Instance.CanCollide and hit.Instance.Transparency < 0.9 then
+                        return math.min(17, travelled)
+                    end
+                    local advance = (hit.Position - pos).Magnitude + 0.25
+                    remaining = remaining - advance
+                    if remaining <= 0 then return 17 end
+                    pos = hit.Position + direction * 0.25
+                end
+                return 17
+            end
+            local depth = freeDistance(inward)
+            local leftWidth = freeDistance(sideways)
+            local rightWidth = freeDistance(-sideways)
+            -- A narrow alcove scores poorly even if its doorway is close.
+            return math.min(depth, 14) + math.min(leftWidth + rightWidth, 22) * 0.65
+        end
+        for _, entry in ipairs(doors) do
+            entry.space = roomSpaceScore(entry)
+            entry.distance = (entry.pivot.Position - origin).Magnitude
+        end
         table.sort(doors, function(a, b)
-            return (a.pivot.Position - origin).Magnitude < (b.pivot.Position - origin).Magnitude
+            -- Strong preference for room size; small distance penalty.
+            return (a.space - a.distance * 0.10) > (b.space - b.distance * 0.10)
         end)
         local function flat(v)
             return Vector3.new(v.X, 0, v.Z)
