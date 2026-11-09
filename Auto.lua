@@ -733,12 +733,37 @@
                     return false
                 end
                 rushStatus.Text = kind .. " - stepping back behind door..."
+                local tuckDirection = flat(target - root.Position)
                 moveQuick(target, 2.2)
                 if not navigationActive(generation) then return false end
                 local remaining = flat(target - root.Position).Magnitude
                 if remaining > 3.2 then
                     rushStatus.Text = kind .. " - could not reach behind door"
                     return false
+                end
+                -- Keep walking in the SAME tuck direction for up to five
+                -- seconds. Physical collision holds us against the wall;
+                -- never choose a different door or reverse direction.
+                if tuckDirection.Magnitude > 0.1 then
+                    local holdDirection = tuckDirection.Unit
+                    local holdBinding = "HackPanelLOSWallHold"
+                    local controls = getPlayerControls()
+                    pcall(function() RunService:UnbindFromRenderStep(holdBinding) end)
+                    rushStatus.Text = kind .. " - pressing against wall (5s)..."
+                    RunService:BindToRenderStep(holdBinding, Enum.RenderPriority.Input.Value + 4, function()
+                        if navigationActive(generation) and humanoid.Parent then
+                            if controls then pcall(function() controls:move(holdDirection, false) end) end
+                            humanoid:Move(holdDirection, false)
+                        end
+                    end)
+                    local holdStart = os.clock()
+                    while navigationActive(generation) and os.clock() - holdStart < 5 do
+                        task.wait(0.05)
+                    end
+                    pcall(function() RunService:UnbindFromRenderStep(holdBinding) end)
+                    if controls then pcall(function() controls:move(Vector3.zero, false) end) end
+                    humanoid:Move(Vector3.zero, false)
+                    if not navigationActive(generation) then return false end
                 end
                 local threat = entityPosition()
                 if threat and sightBlocked(threat + Vector3.new(0, 2, 0), root.Position + Vector3.new(0, 2, 0)) then
