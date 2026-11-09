@@ -726,6 +726,7 @@ end
         -- Match the confirmed spawn locations, not similarly named scenery.
         if parent == workspace then
             valid = name == "rushmoving" or name == "ambushmoving" or name == "eyes"
+                or name == "sally" or name == "windowsally" or name == "sallyrig"
         elseif parent == camera then
             valid = name == "shade" or name == "screech"
         elseif rooms and node:IsDescendantOf(rooms) then
