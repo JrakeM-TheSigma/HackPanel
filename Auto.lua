@@ -1320,8 +1320,16 @@
         if controls then pcall(function() controls:move(Vector3.zero, false) end) end
         rushButton.Text = "AUTO COUNTER: OFF"
         rushStatus.Text = "MANUAL OVERRIDE - movement released (Auto OFF)"
-        overrideText.Text = "OVERRIDE ACTIVE - you have control"
-        overrideText.Visible = true
+        overrideText.Visible = false
+    end)
+
+    -- Destroy the standalone overlay when the HACK PANEL GUI is removed.
+    task.spawn(function()
+        while menuGui and menuGui.Parent and isCurrentRun() do
+            task.wait(0.5)
+        end
+        if overrideConnection then overrideConnection:Disconnect() end
+        if overrideGui and overrideGui.Parent then overrideGui:Destroy() end
     end)
 
     rushButton.MouseButton1Click:Connect(function()
