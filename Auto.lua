@@ -809,7 +809,11 @@
         local allCandidates = closetCandidates(root.Position)
         local closeCandidates = {}
         for _, candidate in ipairs(allCandidates) do
-            if candidate.currentRoom and candidate.distance <= MAX_SAFE_CLOSET_DISTANCE then
+            -- A physically nearby wardrobe can belong to a different streamed
+            -- room model. Don't reject it solely because of room numbering.
+            local immediatelyNearby = candidate.distance <= 14
+            if (candidate.currentRoom and candidate.distance <= MAX_SAFE_CLOSET_DISTANCE)
+                or immediatelyNearby then
                 table.insert(closeCandidates, candidate)
             end
         end
@@ -821,7 +825,7 @@
         local currentRoom = getCurrentRoom()
         local currentCandidates, adjacentCandidates = {}, {}
         for _, candidate in ipairs(allCandidates) do
-            if candidate.currentRoom then
+            if candidate.currentRoom or candidate.distance <= 14 then
                 table.insert(currentCandidates, candidate)
             elseif adjacentRoomPassable(currentRoom, candidate.room) then
                 table.insert(adjacentCandidates, candidate)
@@ -950,7 +954,7 @@
 
         local completed = attemptClosets(currentCandidates)
         if not completed and rushAutoEnabled and rushGeneration == generation then
-            rushStatus.Text = "Rush - no SAFE nearby closet; manual control"
+            rushStatus.Text = "Rush - no reachable nearby hiding spot"
         end
         rushBusy = false
     end
@@ -1057,7 +1061,8 @@
             if not root then return end
             local candidates = {}
             for _, candidate in ipairs(closetCandidates(root.Position)) do
-                if candidate.currentRoom and candidate.distance <= 32 then
+                if (candidate.currentRoom and candidate.distance <= 32)
+                    or candidate.distance <= 14 then
                     table.insert(candidates, candidate)
                 end
             end
@@ -1074,7 +1079,8 @@
             local failure = "No hiding prompts nearby"
             for i, candidate in ipairs(candidates) do
                 if not active() then return end
-                if candidate.currentRoom or adjacentRoomPassable(currentRoom, candidate.room) then
+                if candidate.currentRoom or candidate.distance <= 14
+                    or adjacentRoomPassable(currentRoom, candidate.room) then
                     rushStatus.Text = "Ambush - reaching " .. (candidate.kind or "hide spot") .. " " .. i .. "/" .. #candidates
                     local reached, reason = walkToCloset(candidate, generation)
                     if reached then chosen = candidate; break end
@@ -1082,7 +1088,7 @@
                 end
             end
             if not chosen then
-                rushStatus.Text = "Ambush - no SAFE nearby closet; manual control"
+                rushStatus.Text = "Ambush - no reachable nearby hiding spot"
                 return
             end
             local hidden = isActuallyHiding()
