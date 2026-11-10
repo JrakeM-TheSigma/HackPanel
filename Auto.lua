@@ -802,8 +802,19 @@
         local character = LocalPlayer.Character
         local root = character and character:FindFirstChild("HumanoidRootPart")
         if not root then rushBusy = false; return end
+        -- SAFETY: Never auto-navigate to distant hiding places.
+        -- LOS movement is disabled for live encounters until it can be
+        -- demonstrated not to leave cover or walk into Rush's path.
+        local MAX_SAFE_CLOSET_DISTANCE = 32
         local allCandidates = closetCandidates(root.Position)
-        if #allCandidates == 0 or allCandidates[1].distance > 55 then
+        local closeCandidates = {}
+        for _, candidate in ipairs(allCandidates) do
+            if candidate.currentRoom and candidate.distance <= MAX_SAFE_CLOSET_DISTANCE then
+                table.insert(closeCandidates, candidate)
+            end
+        end
+        allCandidates = closeCandidates
+        if false then -- intentionally disable automatic LOS navigation
             rushStatus.Text = "Rush - checking nearby solid cover..."
             if tryLineOfSightCover("Rush", generation) then rushBusy = false; return end
         end
@@ -845,13 +856,8 @@
                     local promptRange = candidate.prompt and candidate.prompt.MaxActivationDistance or 6
                     if currentRoot and not isActuallyHiding()
                         and (currentRoot.Position - promptPosition).Magnitude > math.max(2, promptRange - 0.25) then
-                        rushStatus.Text = "Moved away - returning to closet..."
-                        local returned, returnReason = walkToCloset(candidate, generation)
-                        if not returned then
-                            rushStatus.Text = "Could not return to closet: " .. tostring(returnReason)
-                            return true
-                        end
-                        rushStatus.Text = "Back at closet - waiting for Rush"
+                        rushStatus.Text = "Moved away - manual control; not chasing closet"
+                        return true
                     end
                     local distance = rushDistance()
                     if distance and distance <= RUSH_ENTER_DISTANCE then break end
@@ -944,16 +950,7 @@
 
         local completed = attemptClosets(currentCandidates)
         if not completed and rushAutoEnabled and rushGeneration == generation then
-            if #adjacentCandidates > 0 then
-                rushStatus.Text = "Trying accessible adjacent-room closet..."
-                completed = attemptClosets(adjacentCandidates)
-            end
-        end
-        if not completed and rushAutoEnabled and rushGeneration == generation then
-            rushStatus.Text = "Rush - closet unreachable; checking solid cover..."
-            if not tryLineOfSightCover("Rush", generation) then
-                rushStatus.Text = "Rush - no verified reachable cover"
-            end
+            rushStatus.Text = "Rush - no SAFE nearby closet; manual control"
         end
         rushBusy = false
     end
@@ -1058,8 +1055,13 @@
             local character = LocalPlayer.Character
             local root = character and character:FindFirstChild("HumanoidRootPart")
             if not root then return end
-            local candidates = closetCandidates(root.Position)
-            if #candidates == 0 or candidates[1].distance > 55 then
+            local candidates = {}
+            for _, candidate in ipairs(closetCandidates(root.Position)) do
+                if candidate.currentRoom and candidate.distance <= 32 then
+                    table.insert(candidates, candidate)
+                end
+            end
+            if false then -- no automatic LOS navigation
                 rushStatus.Text = "Ambush - checking nearby solid cover..."
                 if tryLineOfSightCover("Ambush", generation) then return end
             end
@@ -1080,10 +1082,7 @@
                 end
             end
             if not chosen then
-                rushStatus.Text = "Ambush - checking cover after closet failure..."
-                if not tryLineOfSightCover("Ambush", generation) then
-                    rushStatus.Text = "Ambush - no verified cover: " .. failure
-                end
+                rushStatus.Text = "Ambush - no SAFE nearby closet; manual control"
                 return
             end
             local hidden = isActuallyHiding()
@@ -1113,21 +1112,15 @@
                     local promptRange = chosen.prompt and chosen.prompt.MaxActivationDistance or 6
                     local tooFar = currentRoot and promptPosition and
                         (currentRoot.Position - promptPosition).Magnitude > math.max(2, promptRange - 0.25)
-                    if tooFar and now - lastReturnAttempt >= 0.6 then
-                        lastReturnAttempt = now
-                        rushStatus.Text = "Ambush - moved away, returning to hiding spot..."
-                        local returned, reason = walkToCloset(chosen, generation)
-                        if not returned then
-                            rushStatus.Text = "Ambush - return failed: " .. tostring(reason)
-                        end
-                    elseif tooFar then
-                        rushStatus.Text = "Ambush - returning to hiding spot..."
+                    if tooFar then
+                        rushStatus.Text = "Ambush - moved away; manual control"
+                    else
                     -- Go to safety immediately, but enter only on approach or emergency proximity.
                     -- Ambush rebounds are fast: allow enough lead time for
                     -- the E interaction AND the entering animation to finish.
                     -- A single confirmed 0.24s approach sample is enough on
                     -- rebound; the old two-sample / 180-stud rule was too late.
-                    elseif distance and (distance <= 105 or
+                    if distance and (distance <= 105 or
                         (distance <= 280 and motion.direction == "toward"
                             and motion.towardSamples >= 1))
                         and now - lastHideAttempt >= 0.35 then
@@ -1142,6 +1135,7 @@
                     else
                         rushStatus.Text = "Ambush - ready at hiding spot"
                     end
+                    end -- within prompt range
                 else
                     -- Exit between rebounds after ANY confirmed pass has moved
                     -- safely away. Previously this required "returned" first,
