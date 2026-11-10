@@ -825,10 +825,21 @@ end
     local function isSeekProp(node)
         return getEntityName(node) == "Seek" and not isActualSeek(node)
     end
+    local function isFigureProp(node)
+        -- Figure's nested scenery and rig components can also match the
+        -- broad entity-name classifier. Only the complete FigureRig is live.
+        return getEntityName(node) == "Figure"
+            and not (node:IsA("Model") and node.Name:lower() == "figurerig")
+    end
+    local function isDecorativeEntity(node)
+        return isSeekProp(node) or isFigureProp(node)
+    end
     local function registerEntity(node)
         if not node or not node.Parent then return end
         if not (node:IsA("Model") or node:IsA("BasePart")) then return end
-        if isSeekProp(node) then return end
+        if getEntityName(node) == "Figure"
+            and (not node:IsA("Model") or node.Name ~= "FigureRig") then return end
+        if isDecorativeEntity(node) then return end
         local name = node.Name:lower()
         local parent = node.Parent
         local rooms = getCurrentRooms()
@@ -948,7 +959,7 @@ end
         local nodes = {}
         for node in pairs(entityNodes) do
             if node.Parent and node.Name:lower() ~= "figurecampos"
-                and not isSeekProp(node) and node:IsDescendantOf(workspace) then
+                and not isDecorativeEntity(node) and node:IsDescendantOf(workspace) then
                 nodes[#nodes+1] = node
             else
                 entityNodes[node] = nil
@@ -976,9 +987,22 @@ end
                 end
             end
         end
+        local nearestFigure, nearestFigureDistance = nil, math.huge
+        for _, candidate in ipairs(candidates) do
+            if getEntityName(candidate) == "Figure" and not isDecorativeEntity(candidate) then
+                local part = getEntityPart(candidate)
+                local character = Players.LocalPlayer.Character
+                local root = character and character:FindFirstChild("HumanoidRootPart")
+                local distance = part and root and (part.Position - root.Position).Magnitude or math.huge
+                if distance < nearestFigureDistance then
+                    nearestFigure, nearestFigureDistance = candidate, distance
+                end
+            end
+        end
         local function inspect(obj)
             local name = getEntityName(obj)
-            if not name or isSeekProp(obj) or obj:IsDescendantOf(Players) then return end
+            if name == "Figure" and obj ~= nearestFigure then return end
+            if not name or isDecorativeEntity(obj) or obj:IsDescendantOf(Players) then return end
             if obj:IsA("Model") and not obj:FindFirstChildWhichIsA("BasePart",true) then return end
             -- Ignore prefabs in common storage/template folders.
             local ancestor = obj.Parent
@@ -1126,7 +1150,7 @@ end
         for i, obj in ipairs(objects) do
             if i % 150 == 0 then task.wait() end
             local name = getEntityName(obj)
-            if name and name ~= "Dupe" and activeWarnings[name] and not obj:IsDescendantOf(Players) then
+            if name and name ~= "Dupe" and not isDecorativeEntity(obj) and activeWarnings[name] and not obj:IsDescendantOf(Players) then
                 local isLive = true
                 local parent = obj.Parent
                 while parent and parent ~= workspace do
@@ -1267,9 +1291,18 @@ end
     nextDoorTracer.Visible = false
     nextDoorTracer.Parent = nextDoorGui
 
+    local secondDoorLabel = createEntityInfoBox(nextDoorGui, nextDoorColor, "SecondNextDoorDistance")
+    local secondDoorTracer = nextDoorTracer:Clone()
+    secondDoorTracer.Name = "SecondNextDoorTracer"
+    secondDoorTracer.Parent = nextDoorGui
+    local secondDoorBox, secondDoorPart
     local nextDoorBox, nextDoorPart, nextDoorRoomNumber
     local function clearNextDoorTarget()
         if nextDoorBox then nextDoorBox:Destroy(); nextDoorBox = nil end
+        if secondDoorBox then secondDoorBox:Destroy(); secondDoorBox = nil end
+        secondDoorPart = nil
+        secondDoorLabel.Visible = false
+        secondDoorTracer.Visible = false
         nextDoorPart, nextDoorRoomNumber = nil, nil
         nextDoorLabel.Visible = false
         nextDoorTracer.Visible = false
@@ -1299,6 +1332,33 @@ end
         return best
     end
 
+    local function findSecondDoorPanel(door, primary)
+        if not door or not primary then return nil end
+        -- Library double doors: find the other similarly sized visible slab,
+        -- not the frame, signs, handles or small decorative components.
+        local primarySize = primary.Size
+        local primaryArea = math.max(primarySize.X * primarySize.Y,
+            primarySize.X * primarySize.Z, primarySize.Y * primarySize.Z)
+        local best, bestDistance
+        for _, candidate in ipairs(door:GetDescendants()) do
+            if candidate:IsA("BasePart") and candidate ~= primary
+                and candidate.Transparency < 0.9 then
+                local n = candidate.Name:lower()
+                local size = candidate.Size
+                local area = math.max(size.X*size.Y, size.X*size.Z, size.Y*size.Z)
+                local distance = (candidate.Position-primary.Position).Magnitude
+                if not (n:find("frame") or n:find("sign") or n:find("handle")
+                    or n:find("knob") or n:find("hitbox") or n:find("collision"))
+                    and area >= primaryArea * 0.65 and area <= primaryArea * 1.5
+                    and distance > 1 and distance < 16
+                    and (not bestDistance or distance < bestDistance) then
+                    best, bestDistance = candidate, distance
+                end
+            end
+        end
+        return best
+    end
+
     local function refreshNextDoorTarget()
         if not nextDoorEspEnabled then clearNextDoorTarget(); return end
         local currentRoom, currentNumber = getCurrentRoom()
@@ -1313,7 +1373,9 @@ end
         local nextNumber = currentNumber + 1 -- Display the number on the exit door; target stays in current room.
         local door = targetRoom and targetRoom:FindFirstChild("Door")
         local part = chooseNextDoorPart(door)
-        if part ~= nextDoorPart or nextNumber ~= nextDoorRoomNumber then
+        local other = findSecondDoorPanel(door, part)
+        if part ~= nextDoorPart or other ~= secondDoorPart
+            or nextNumber ~= nextDoorRoomNumber then
             clearNextDoorTarget()
             if part then
                 nextDoorPart, nextDoorRoomNumber = part, nextNumber
@@ -1327,6 +1389,14 @@ end
                 nextDoorBox.Transparency = 0.35
                 nextDoorBox.Color3 = nextDoorColor
                 nextDoorBox.Parent = workspace.CurrentCamera or workspace
+                if other then
+                    secondDoorPart = other
+                    secondDoorBox = nextDoorBox:Clone()
+                    secondDoorBox.Name = "HackPanelSecondNextDoorBox"
+                    secondDoorBox.Adornee = other
+                    secondDoorBox.Size = other.Size + Vector3.new(0.18,0.18,0.18)
+                    secondDoorBox.Parent = workspace.CurrentCamera or workspace
+                end
             end
         end
     end
@@ -1350,7 +1420,11 @@ end
         visible = visible and projected.Z > 0
         nextDoorLabel.Visible = visible
         nextDoorTracer.Visible = visible
-        if not visible then return end
+        if not visible then
+            secondDoorLabel.Visible = false
+            secondDoorTracer.Visible = false
+            return
+        end
         local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
         local distance = root and math.floor((root.Position - part.Position).Magnitude + 0.5) or 0
         nextDoorLabel.Text = string.format("NEXT DOOR %d  |  %d studs", nextDoorRoomNumber or 0, distance)
@@ -1361,6 +1435,25 @@ end
         nextDoorTracer.Position = UDim2.fromOffset((from.X + to.X) / 2, (from.Y + to.Y) / 2)
         nextDoorTracer.Size = UDim2.fromOffset(diff.Magnitude, 2)
         nextDoorTracer.Rotation = math.deg(math.atan2(diff.Y, diff.X))
+        local other = secondDoorPart
+        local otherProjected, otherVisible
+        if other and other:IsDescendantOf(workspace) then
+            otherProjected, otherVisible = camera:WorldToViewportPoint(other.Position)
+            otherVisible = otherVisible and otherProjected.Z > 0
+        end
+        secondDoorLabel.Visible = otherVisible == true
+        secondDoorTracer.Visible = otherVisible == true
+        if otherVisible then
+            local d = root and math.floor((root.Position-other.Position).Magnitude+0.5) or 0
+            secondDoorLabel.Text = string.format("NEXT DOOR %d  |  %d studs",
+                nextDoorRoomNumber or 0, d)
+            secondDoorLabel.Position = UDim2.fromOffset(otherProjected.X,otherProjected.Y+46)
+            local delta = Vector2.new(otherProjected.X,otherProjected.Y)-from
+            secondDoorTracer.Position = UDim2.fromOffset(
+                from.X+delta.X/2,from.Y+delta.Y/2)
+            secondDoorTracer.Size = UDim2.fromOffset(delta.Magnitude,2)
+            secondDoorTracer.Rotation = math.deg(math.atan2(delta.Y,delta.X))
+        end
     end)
 
     task.spawn(function()
