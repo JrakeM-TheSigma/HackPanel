@@ -1,6 +1,9 @@
     -- Keep Stairwell HUD/marker locals in their own register frame.
     -- Only one register in createMenu; the stairwell implementation runs in
     -- its own function frame rather than expanding the main menu's locals.
+    -- Isolate Stairwell's locals from createMenu entirely. The previous
+    -- local stairControls still consumed a register in the already-full frame.
+    ;(function()
     local stairControls = (function()
     local stairCounterGui = Instance.new("ScreenGui")
     stairCounterGui.Name = "HackPanelStairwellDoorCounter"
@@ -472,6 +475,7 @@
     task.spawn(fetchAllImages)
     end)()
     end)() -- end isolated menu controls
+    end)() -- end Stairwell register-isolated frame
 end
 
 createMenu()
